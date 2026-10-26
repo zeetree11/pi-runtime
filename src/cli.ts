@@ -932,8 +932,10 @@ async function cmdServe(args: string[]): Promise<number> {
       .filter(Boolean)
       .map((id) => (id.startsWith("group:") ? id : `group:${id}`)),
   );
-  const wakeWords = (process.env.QQ_WAKE_WORDS ?? "")
-    .split(",")
+  // Wake words are channel-agnostic on purpose: the user's habit is "say the name", and which
+  // transport the message arrived on is an implementation detail from their point of view.
+  const wakeWords = [process.env.QQ_WAKE_WORDS, process.env.FEISHU_WAKE_WORDS]
+    .flatMap((value) => (value ?? "").split(","))
     .map((word) => word.trim())
     .filter(Boolean);
   // One handler for every transport: identity → event → run → reply → maybe distil.
