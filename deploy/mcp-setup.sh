@@ -8,7 +8,9 @@ set -uo pipefail
 ENV=/srv/pi-rt/env/pi-rt.env
 MCP_DIR=/srv/pi-rt/workspace/mcp
 DATA=/srv/pi-rt/data2
-CONF_DIR=$DATA/pi/agent
+# pi 的 MCP 配置读 ~/.pi/agent/mcp.json，不受 PI_CODING_AGENT_DIR 影响，所以容器里要用
+# HOME=/data 才能让配置落在持久化的数据卷上（否则写进容器层，重建即丢）。
+CONF_DIR=$DATA/.pi/agent
 
 echo "== 1) 放置 MCP server =="
 mkdir -p "$MCP_DIR" "$CONF_DIR"
@@ -17,13 +19,16 @@ chown -R 10001:10001 "$MCP_DIR" "$CONF_DIR"
 ls -l "$MCP_DIR/fetch-server.mjs"
 
 echo "== 2) 写 MCP 配置 =="
+# exposure=direct：默认是 codemode（只能从脚本里调，模型看不到）。single small tool 直接声明
+# 更合算——150 token 换模型能直接调，比让模型先写脚本再调便宜。
 cat > "$CONF_DIR/mcp.json" <<'JSON'
 {
   "mcpServers": {
     "fetch": {
       "command": "node",
       "args": ["/workspace/mcp/fetch-server.mjs"],
-      "toolExposure": ["fetch"]
+      "exposure": "direct",
+      "description": "读取公网网页并返回纯文本（自动去标签、限长）"
     }
   }
 }
@@ -44,6 +49,7 @@ echo "== 4) 重建容器（env-file 改动必须重建，restart 不生效）=="
 docker rm -f pi-rt >/dev/null 2>&1
 docker run -d --name pi-rt --restart unless-stopped \
   --env-file "$ENV" \
+  -e HOME=/data \
   -v "$DATA":/data -v /srv/pi-rt/workspace:/workspace \
   -e PI_RT_DATA_DIR=/data -e PI_RT_WORKSPACE=/workspace \
   pi-runtime:latest node src/cli.ts serve --channel feishu >/dev/null && echo "  已启动"
