@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Minimal MCP server exposing a single `fetch` tool.
+ * Minimal MCP server exposing two tools: `fetch` and `search`.
  *
  * Why hand-rolled instead of @modelcontextprotocol/sdk: this runtime ships as one image with no
  * extra install step, and the SDK would pull dependencies into an image that already runs on a
  * 1.7 GB box. MCP's stdio transport is newline-delimited JSON-RPC, which is small enough to
  * implement correctly in one file — and the small surface is easier to audit than a dependency.
  *
- * Why only one tool: pi has no built-in network access, and `safe` mode excludes bash, so the
- * agent could not reach the web at all. One tool closes that gap for ~150 tokens of context;
- * a general-purpose fetch server with eight tools would cost ten times that.
+ * Why only two tools: pi has no built-in network access, and `safe` mode excludes bash, so the
+ * agent could not reach the web at all. Two tools (read a page, find a page) close that gap for
+ * ~300 tokens of context; a general-purpose server with eight tools would cost five times that.
  *
  * Security: this is a server-side fetcher driven by a model. It refuses non-http(s) schemes and
  * any host that resolves to a private address, so a prompt-injected page cannot make the agent
@@ -41,6 +41,104 @@ const TOOL = {
     additionalProperties: false,
   },
 };
+
+/**
+ * Search tool.
+ *
+ * Why a second tool instead of "let the model fetch a search engine": the model cannot reliably
+ * scrape a result page — engines return markup that differs per request and are hostile to
+ * naive parsing. Normalising here means the model sees a stable list and spends tokens on the
+ * answer instead of on HTML.
+ *
+ * Backend: DuckDuckGo's HTML endpoint, which needs no API key. That is the whole trade-off —
+ * no key and no billing, but it is best-effort: it can rate-limit a datacenter IP, and its
+ * markup may change. Failures are reported as failures, never as "no results".
+ */
+const SEARCH_TOOL = {
+  name: "search",
+  description:
+    "Search the web and return the top results (title, url, snippet). " +
+    "Use when the user asks about something you do not know or that changes over time. " +
+    "Follow up with `fetch` on a result URL to read the page.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What to search for." },
+      limit: { type: "integer", minimum: 1, maximum: 10, description: "How many results (default 5)." },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+const SEARCH_ENDPOINT = process.env.MCP_SEARCH_ENDPOINT ?? "https://html.duckduckgo.com/html/";
+const SEARCH_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+/** Decode a DuckDuckGo redirect link (`//duckduckgo.com/l/?uddg=...`) into the real URL. */
+function decodeResultUrl(href) {
+  try {
+    const absolute = href.startsWith("//") ? `https:${href}` : href;
+    const url = new URL(absolute, "https://duckduckgo.com");
+    return url.searchParams.get("uddg") ?? url.href;
+  } catch {
+    return href;
+  }
+}
+
+/**
+ * Parse the HTML endpoint's results. Exported so the tests can pin behaviour against a fixture
+ * without touching the network.
+ */
+export function parseDuckDuckGo(html, limit = 5) {
+  const results = [];
+  const blockRe = /class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = blockRe.exec(html)) !== null && results.length < limit) {
+    const url = decodeResultUrl(match[1]);
+    const title = toReadableText(match[2]);
+    // The snippet lives after the title in the same result block; look ahead a bounded window
+    // so a result without a snippet does not steal the next result's text.
+    const window = html.slice(match.index, match.index + 3000);
+    const snippetMatch = window.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+    const snippet = snippetMatch ? toReadableText(snippetMatch[1]) : "";
+    if (!title || !url) continue;
+    results.push({ title, url, snippet });
+  }
+  return results;
+}
+
+export async function runSearch(query, options = {}) {
+  const trimmed = String(query ?? "").trim();
+  if (!trimmed) throw new Error("搜索词为空");
+  if (trimmed.length > 200) throw new Error("搜索词过长（上限 200 字符）");
+  const limit = Math.min(Math.max(Number(options.limit ?? 5), 1), 10);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS);
+  try {
+    const response = await fetch(`${SEARCH_ENDPOINT}?q=${encodeURIComponent(trimmed)}`, {
+      signal: controller.signal,
+      headers: { "user-agent": SEARCH_UA, accept: "text/html" },
+    });
+    if (!response.ok) throw new Error(`搜索服务返回 ${response.status}`);
+    const html = await response.text();
+    const results = parseDuckDuckGo(html, limit);
+    if (results.length === 0) {
+      // Distinguish "the engine blocked us" from "genuinely nothing found".
+      if (/anomaly|unusual traffic|captcha/i.test(html)) {
+        throw new Error("搜索被限流（返回验证页）");
+      }
+      return `没有找到「${trimmed}」的结果。`;
+    }
+    const lines = results.map(
+      (result, index) => `${index + 1}. ${result.title}\n   ${result.url}${result.snippet ? `\n   ${result.snippet}` : ""}`,
+    );
+    return [`搜索：${trimmed}`, "", ...lines].join("\n");
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Private, loopback, link-local and metadata ranges — never legitimate for a model-driven fetch. */
 function isPrivateAddress(address) {
@@ -183,16 +281,29 @@ async function handle(message) {
     return;
   }
   if (method === "tools/list") {
-    reply(id, { tools: [TOOL] });
+    reply(id, { tools: [TOOL, SEARCH_TOOL] });
     return;
   }
   if (method === "tools/call") {
     const name = params?.name;
+    const args = params?.arguments ?? {};
+
+    if (name === SEARCH_TOOL.name) {
+      try {
+        const text = await runSearch(args.query, { limit: args.limit });
+        reply(id, { content: [{ type: "text", text }], isError: false });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        reply(id, { content: [{ type: "text", text: `搜索失败：${reason}` }], isError: true });
+      }
+      return;
+    }
+
     if (name !== TOOL.name) {
       fail(id, `未知工具：${name}`);
       return;
     }
-    const url = params?.arguments?.url;
+    const url = args.url;
     if (typeof url !== "string" || url.length === 0) {
       fail(id, "缺少参数 url");
       return;

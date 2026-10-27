@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { toReadableText } from "../mcp/fetch-server.mjs";
+import { toReadableText, parseDuckDuckGo, runSearch } from "../mcp/fetch-server.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -88,8 +88,9 @@ check("initialize returns protocolVersion", typeof init.result?.protocolVersion 
 check("serverInfo names the server", init.result?.serverInfo?.name === "fetch");
 
 const list = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-check("exactly one tool", list.result?.tools?.length === 1, String(list.result?.tools?.length));
-check("tool is named fetch", list.result?.tools?.[0]?.name === "fetch");
+check("two tools exposed", list.result?.tools?.length === 2, String(list.result?.tools?.length));
+check("fetch is listed", list.result?.tools?.some((t) => t.name === "fetch"));
+check("search is listed", list.result?.tools?.some((t) => t.name === "search"));
 check("tool requires url", JSON.stringify(list.result?.tools?.[0]?.inputSchema?.required) === '["url"]');
 
 const ok = await rpc({
@@ -132,6 +133,38 @@ async function tryFetch(url) {
 for (const url of ["http://localhost/x", "http://169.254.169.254/latest/meta-data", "http://10.1.2.3/x", "http://192.168.1.1/"]) {
   const result = await tryFetch(url);
   check(`blocked ${url}`, result.startsWith("BLOCKED"), result);
+}
+
+// 5) DuckDuckGo result parsing (fixture, no network)
+{
+  const fixture = `
+    <div class="result__body">
+      <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdoc&amp;rut=x">示例文档</a>
+      <a class="result__snippet" href="#">这是示例文档的摘要。</a>
+    </div>
+    <div class="result__body">
+      <a rel="nofollow" class="result__a" href="https://plain.example.org/page">Plain <b>title</b></a>
+      <a class="result__snippet" href="#">第二条摘要</a>
+    </div>
+  `;
+  const results = parseDuckDuckGo(fixture, 5);
+  check("parses two results", results.length === 2, String(results.length));
+  check("decodes redirect url", results[0]?.url === "https://example.com/doc", results[0]?.url);
+  check("keeps plain url", results[1]?.url === "https://plain.example.org/page", results[1]?.url);
+  check("title text readable", results[1]?.title === "Plain title", results[1]?.title);
+  check("snippet captured", results[0]?.snippet.includes("示例文档的摘要"), results[0]?.snippet);
+  check("respects limit", parseDuckDuckGo(fixture, 1).length === 1);
+  check("empty html yields none", parseDuckDuckGo("<html></html>", 5).length === 0);
+}
+
+// 6) search input validation happens before any network call
+{
+  let blocked = false;
+  try { await runSearch(""); } catch (e) { blocked = /为空/.test(e.message); }
+  check("empty query rejected", blocked);
+  let tooLong = false;
+  try { await runSearch("长".repeat(201)); } catch (e) { tooLong = /过长/.test(e.message); }
+  check("overlong query rejected", tooLong);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
