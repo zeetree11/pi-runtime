@@ -24,6 +24,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src ./src
 COPY eval ./eval
+# mcp/ ships with the image because src/memory.ts imports the shared embedder from
+# mcp/lib/embed.mjs. Without this line the runtime crashes on startup with ERR_MODULE_NOT_FOUND
+# — the MCP servers themselves still run from the mounted workspace, so only the lib is needed.
+COPY mcp ./mcp
 
 RUN mkdir -p /data /workspace && chown -R agent:agent /data /workspace /app
 USER agent
