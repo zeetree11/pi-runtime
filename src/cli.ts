@@ -17,6 +17,7 @@ import { ShortStateStore, parseTtl } from "./short-state.ts";
 import { ReminderStore, extractReminderDirectives, parseWhen } from "./reminders.ts";
 import { enforceBrevity } from "./brevity.ts";
 import { embedText } from "../mcp/lib/embed.mjs";
+import { ApprovalStore, extractAskDirectives, parseDecision } from "./approval.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
 import { NOISE_TYPES } from "./event-log.ts";
@@ -939,8 +940,35 @@ async function cmdServe(args: string[]): Promise<number> {
     .flatMap((value) => (value ?? "").split(","))
     .map((word) => word.trim())
     .filter(Boolean);
+  // Approvals are parked per thread: the agent asks, the user answers, the task resumes.
+  const approvals = new ApprovalStore(DATA_DIR);
+
   // One handler for every transport: identity → event → run → reply → maybe distil.
   const handler = async (message: Incoming, send: (chatId: string, text: string) => Promise<void>) => {
+    // A reply of "同意"/"拒绝" belongs to a parked approval, not to a new task. Checked before
+    // ingest so the decision never pollutes the conversation as a user turn.
+    const pendingApproval = approvals.pendingFor(`${message.channel}:${message.chatId}`);
+    const decision = pendingApproval ? parseDecision(message.text) : null;
+    if (pendingApproval && decision) {
+      approvals.decide(pendingApproval.id, decision, { approvedBy: message.externalId });
+      if (decision === "denied") {
+        await send(message.chatId, "好，取消。");
+        return;
+      }
+      // Re-run the original request now that it has consent. The task is re-created rather than
+      // resumed because pi sessions are one-shot; what carries over is the request, not a half
+      // finished tool loop.
+      await send(message.chatId, "收到，继续。");
+      const retryId = store.createTask(pendingApproval.request, cfg.workspace, `${message.channel}:${message.chatId}`);
+      try {
+        const reply = await runTask(store, cfg, store.getTask(retryId)!, { onStatus: dim, recordUserEvent: false }, memory);
+        await send(message.chatId, reply);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await send(message.chatId, `执行失败：${reason.slice(0, 300)}`).catch(() => {});
+      }
+      return;
+    }
     // In a group, every message reaches us. Answering all of them is noisy and expensive, so we
     // stay quiet unless the bot was mentioned (DMs are always addressed).
 
@@ -964,6 +992,21 @@ async function cmdServe(args: string[]): Promise<number> {
         { onStatus: dim, recordUserEvent: false },
         memory,
       );
+      // An `<!--ask: ...-->` token parks the task: the question is what the user sees, and the
+      // original request is stored so a "同意" can resume it without copy-paste.
+      const asks = extractAskDirectives(reply);
+      if (asks.asks.length > 0) {
+        const approval = approvals.request({
+          thread: result.thread,
+          taskId,
+          action: asks.asks[0].action,
+          request: message.text,
+        });
+        dim(`approval #${approval.id} parked: ${approval.action}`);
+        await send(message.chatId, asks.cleaned || approval.prompt);
+        if (asks.cleaned) await send(message.chatId, approval.prompt);
+        return;
+      }
       await send(message.chatId, reply);
       const pending = store.pendingTurnCount(result.thread);
       if (pending >= cfg.batchTurns) {
@@ -1379,6 +1422,32 @@ async function main(): Promise<number> {
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
       }
       return 0;
+    }
+    case "approvals": {
+      const store = new ApprovalStore(DATA_DIR);
+      store.expire();
+      const rows = store.listPending();
+      if (rows.length === 0) {
+        console.log("没有待确认的请求");
+        return 0;
+      }
+      for (const row of rows) {
+        const left = Math.max(0, Math.round((new Date(row.expiresAt).getTime() - Date.now()) / 1000));
+        console.log(`#${row.id}  ${row.action}  （${left}s 后过期，线程 ${row.thread}）`);
+      }
+      return 0;
+    }
+    case "approve":
+    case "deny": {
+      const store = new ApprovalStore(DATA_DIR);
+      const id = Number(rest[0]);
+      if (!Number.isInteger(id)) {
+        console.log(`用法：${command} <id>（先用 approvals 查 id）`);
+        return 1;
+      }
+      const decided = store.decide(id, command === "approve" ? "approved" : "denied");
+      console.log(decided ? `#${id} ${decided.status}` : `#${id} 不存在或已决定`);
+      return decided ? 0 : 1;
     }
     case "remind": {
       const store = new ReminderStore(DATA_DIR);
