@@ -71,9 +71,61 @@ const SEARCH_TOOL = {
   },
 };
 
-const SEARCH_ENDPOINT = process.env.MCP_SEARCH_ENDPOINT ?? "https://html.duckduckgo.com/html/";
 const SEARCH_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+/**
+ * Backends in preference order.
+ *
+ * Bing first because this server runs in mainland China, where DuckDuckGo is unreachable
+ * (measured on the deployment host: `fetch failed` for DDG's HTML endpoint, HTTP 200 for Bing).
+ * DuckDuckGo stays as a fallback for deployments elsewhere. Neither needs an API key; both are
+ * best-effort and may rate-limit a datacenter IP.
+ */
+const SEARCH_BACKENDS = (process.env.MCP_SEARCH_BACKENDS ?? "bing,duckduckgo")
+  .split(",")
+  .map((name) => name.trim().toLowerCase())
+  .filter(Boolean);
+
+const BACKEND_URLS = {
+  bing: (query) => `https://cn.bing.com/search?q=${encodeURIComponent(query)}&setlang=zh-CN`,
+  duckduckgo: (query) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+};
+
+/** Bing wraps result links as /ck/a?...&u=a1<base64url>; unwrap to the real destination. */
+function decodeBingUrl(href) {
+  try {
+    const absolute = href.startsWith("/") ? `https://www.bing.com${href}` : href;
+    const url = new URL(absolute, "https://www.bing.com");
+    const wrapped = url.searchParams.get("u");
+    if (url.hostname.endsWith("bing.com") && wrapped) {
+      const payload = wrapped.startsWith("a1") ? wrapped.slice(2) : wrapped;
+      const decoded = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+      if (/^https?:\/\//i.test(decoded)) return decoded;
+    }
+    return url.href;
+  } catch {
+    return href;
+  }
+}
+
+/** Parse Bing's b_algo result blocks. Exported for fixture tests. */
+export function parseBing(html, limit = 5) {
+  const results = [];
+  const blocks = String(html).split(/class="b_algo"/i).slice(1);
+  for (const block of blocks) {
+    if (results.length >= limit) break;
+    const anchor = block.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!anchor) continue;
+    const url = decodeBingUrl(anchor[1].replace(/&amp;/g, "&"));
+    const title = toReadableText(anchor[2]);
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = snippetMatch ? toReadableText(snippetMatch[1]) : "";
+    if (!title || !url) continue;
+    results.push({ title, url, snippet });
+  }
+  return results;
+}
 
 /** Decode a DuckDuckGo redirect link (`//duckduckgo.com/l/?uddg=...`) into the real URL. */
 function decodeResultUrl(href) {
@@ -116,25 +168,40 @@ export async function runSearch(query, options = {}) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS);
+  const failures = [];
+
   try {
-    const response = await fetch(`${SEARCH_ENDPOINT}?q=${encodeURIComponent(trimmed)}`, {
-      signal: controller.signal,
-      headers: { "user-agent": SEARCH_UA, accept: "text/html" },
-    });
-    if (!response.ok) throw new Error(`搜索服务返回 ${response.status}`);
-    const html = await response.text();
-    const results = parseDuckDuckGo(html, limit);
-    if (results.length === 0) {
-      // Distinguish "the engine blocked us" from "genuinely nothing found".
-      if (/anomaly|unusual traffic|captcha/i.test(html)) {
-        throw new Error("搜索被限流（返回验证页）");
+    // Try each backend until one returns usable results. A backend that is blocked in this
+    // network and one that is merely rate-limited both degrade to "try the next one", and only
+    // when all fail do we report an error instead of pretending there were no results.
+    for (const backend of SEARCH_BACKENDS) {
+      const buildUrl = BACKEND_URLS[backend];
+      if (!buildUrl) continue;
+      try {
+        const response = await fetch(buildUrl(trimmed), {
+          signal: controller.signal,
+          headers: { "user-agent": SEARCH_UA, accept: "text/html", "accept-language": "zh-CN,zh;q=0.9,en;q=0.8" },
+        });
+        if (!response.ok) {
+          failures.push(`${backend}: HTTP ${response.status}`);
+          continue;
+        }
+        const html = await response.text();
+        const results = backend === "bing" ? parseBing(html, limit) : parseDuckDuckGo(html, limit);
+        if (results.length === 0) {
+          if (/anomaly|unusual traffic|captcha|验证/i.test(html)) failures.push(`${backend}: 被限流`);
+          else failures.push(`${backend}: 无结果`);
+          continue;
+        }
+        const lines = results.map(
+          (result, index) => `${index + 1}. ${result.title}\n   ${result.url}${result.snippet ? `\n   ${result.snippet}` : ""}`,
+        );
+        return [`搜索：${trimmed}（${backend}）`, "", ...lines].join("\n");
+      } catch (error) {
+        failures.push(`${backend}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return `没有找到「${trimmed}」的结果。`;
     }
-    const lines = results.map(
-      (result, index) => `${index + 1}. ${result.title}\n   ${result.url}${result.snippet ? `\n   ${result.snippet}` : ""}`,
-    );
-    return [`搜索：${trimmed}`, "", ...lines].join("\n");
+    throw new Error(`所有搜索后端均失败 —— ${failures.join("；")}`);
   } finally {
     clearTimeout(timer);
   }

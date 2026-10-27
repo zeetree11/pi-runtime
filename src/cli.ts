@@ -16,6 +16,7 @@ import { Members } from "./members.ts";
 import { ShortStateStore, parseTtl } from "./short-state.ts";
 import { ReminderStore, extractReminderDirectives, parseWhen } from "./reminders.ts";
 import { enforceBrevity } from "./brevity.ts";
+import { embedText } from "../mcp/lib/embed.mjs";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
 import { NOISE_TYPES } from "./event-log.ts";
@@ -1336,6 +1337,47 @@ async function main(): Promise<number> {
       console.log(`# ${usage.map((u) => `${u.role} ${u.chars}/${u.limit}（${u.percent}%）`).join(" · ")}\n`);
       if (soul) console.log(soul);
       if (contracts) console.log(`\n---\n\n${contracts}`);
+      return 0;
+    }
+    case "memory-embed": {
+      // Backfill vectors for rows written before retrieval existed. Idempotent: only rows with
+      // a NULL embedding are touched, so it is safe to run on every deploy.
+      const store = new MemoryStore(DATA_DIR, loadConfig().ownerName);
+      const pending = store.needingEmbedding(200);
+      if (pending.length === 0) {
+        const stats = store.embeddingStats();
+        console.log(`无需回填：${stats.embedded}/${stats.total} 条已有向量（模型 ${stats.models.join(",") || "无"}）`);
+        return 0;
+      }
+      let done = 0;
+      let model = "";
+      for (const item of pending) {
+        const embedded = await embedText(item.text);
+        store.setEmbedding(item.id, embedded.vector, embedded.model);
+        model = embedded.model;
+        done += 1;
+      }
+      const stats = store.embeddingStats();
+      console.log(`已回填 ${done} 条向量（模型 ${model}），当前 ${stats.embedded}/${stats.total}`);
+      return 0;
+    }
+    case "memory-search": {
+      const store = new MemoryStore(DATA_DIR, loadConfig().ownerName);
+      const query = rest.join(" ").trim();
+      if (!query) {
+        console.log("用法：memory-search <查询>");
+        return 1;
+      }
+      const embedded = await embedText(query);
+      const hits = store.similaritySearch(embedded.vector, { limit: 5, model: embedded.model });
+      if (hits.length === 0) {
+        console.log(`没有命中（模型 ${embedded.model}）`);
+        return 0;
+      }
+      for (const { row, score } of hits) {
+        console.log(`${score.toFixed(3)}  ${row.content}`);
+        if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
+      }
       return 0;
     }
     case "remind": {

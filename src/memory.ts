@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { detectSecret } from "./secrets.ts";
+import { blobToVector as toVector, cosine } from "../mcp/lib/embed.mjs";
 
 export type MemoryCategory = "preference" | "fact" | "event";
 export type MemoryAction = "create" | "correct" | "invalidate" | "contest";
@@ -164,6 +165,10 @@ export class MemoryStore {
     this.ensureColumn("memories", "target_type", "TEXT NOT NULL DEFAULT 'current_speaker'");
     this.ensureColumn("memories", "target_name", "TEXT");
     this.ensureColumn("memories", "evidence_event_id", "INTEGER");
+    // Retrieval columns (mem0-style). Kept nullable so old rows stay valid; a row without a
+    // vector is still injected by the keyword path and simply not returned by similarity search.
+    this.ensureColumn("memories", "embedding", "BLOB");
+    this.ensureColumn("memories", "embedding_model", "TEXT");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_key_active ON memories(key) WHERE status = 'active';");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_mem_cat ON memories(category, status);");
 
@@ -465,6 +470,90 @@ export class MemoryStore {
       (row) => !thread || row.thread === null || row.thread === thread,
     );
     return new Set(rows.map((row) => row.id));
+  }
+
+  // ── 检索（mem0 风格）─────────────────────────────────────────────────────────────────
+  //
+  // Injection stays the default path: it is free and covers the common case. These methods add
+  // a *pull* channel on top, so a question the injected block happens to miss ("上次那个并发
+  // 的问题") can still find its row. The invariants are unchanged: only `active` rows are
+  // returned, scope filtering still applies, and nothing here writes to the tables except the
+  // embedding column.
+
+  /** Rows without a vector yet, so a backfill can catch up after an upgrade. */
+  needingEmbedding(limit = 50): Array<{ id: number; text: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, key, content, target_name FROM memories
+          WHERE embedding IS NULL AND status = 'active'
+          ORDER BY id DESC LIMIT ?`,
+      )
+      .all(limit) as Array<{ id: number; key: string; content: string; target_name: string | null }>;
+    return rows.map((row) => ({
+      id: Number(row.id),
+      // Embed the same text the model would read: key carries the slot semantics that content
+      // alone often drops ("database" vs "用 SQLite").
+      text: [row.key, row.target_name ?? "", row.content].filter(Boolean).join(" · "),
+    }));
+  }
+
+  setEmbedding(id: number, vector: Float32Array | ArrayBuffer, model: string): void {
+    const buffer = vector instanceof Float32Array ? Buffer.from(vector.buffer) : Buffer.from(vector);
+    this.db.prepare("UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?").run(buffer, model, id);
+  }
+
+  /** How many active rows carry a vector for the given model (for `doctor` / diagnostics). */
+  embeddingStats(): { total: number; embedded: number; models: string[] } {
+    const total = Number((this.db.prepare("SELECT COUNT(*) n FROM memories WHERE status = 'active'").get() as { n: number }).n);
+    const embedded = Number(
+      (this.db.prepare("SELECT COUNT(*) n FROM memories WHERE status = 'active' AND embedding IS NOT NULL").get() as { n: number }).n,
+    );
+    const models = (
+      this.db
+        .prepare("SELECT DISTINCT embedding_model m FROM memories WHERE embedding_model IS NOT NULL")
+        .all() as Array<{ m: string }>
+    ).map((row) => row.m);
+    return { total, embedded, models };
+  }
+
+  /**
+   * Cosine search over active rows, optionally limited to one embedding model.
+   *
+   * `model` matters: vectors from different models are not comparable, so a query embedded by
+   * the hash provider must not be scored against 1024-dim API vectors. Rows whose model differs
+   * are skipped rather than silently mis-scored.
+   */
+  similaritySearch(
+    queryVector: Float32Array,
+    options: { limit?: number; model?: string; thread?: string | null; minScore?: number } = {},
+  ): Array<{ row: MemoryRow; score: number }> {
+    const limit = Math.min(Math.max(options.limit ?? 5, 1), 20);
+    // Low floor on purpose: the hash fallback only measures surface overlap, so a strict
+    // threshold would hide every hit until a real embedding provider is configured.
+    const minScore = options.minScore ?? 0.08;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM memories
+          WHERE status = 'active'
+            AND embedding IS NOT NULL
+            ${options.model ? "AND embedding_model = ?" : ""}`,
+      )
+      .all(...(options.model ? [options.model] : [])) as Array<Record<string, unknown>>;
+
+    const scored = rows
+      .map((row) => {
+        const vector = toVector(row.embedding);
+        if (!vector || vector.length !== queryVector.length) return null;
+        const score = cosine(queryVector, vector);
+        return { row: row as unknown as MemoryRow, score };
+      })
+      .filter((entry): entry is { row: MemoryRow; score: number } => entry !== null)
+      .filter((entry) => entry.score >= minScore)
+      // 项目事实不能漏到个人聊天：与注入同一条作用域规则。
+      .filter((entry) => !options.thread || entry.row.thread === null || entry.row.thread === options.thread)
+      .sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, limit);
   }
 
   /** Compact state handed to the extractor, including row IDs for correct/invalidate/contest. */

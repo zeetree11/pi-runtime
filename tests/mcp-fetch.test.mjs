@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { toReadableText, parseDuckDuckGo, runSearch } from "../mcp/fetch-server.mjs";
+import { toReadableText, parseDuckDuckGo, parseBing, runSearch } from "../mcp/fetch-server.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -157,7 +157,25 @@ for (const url of ["http://localhost/x", "http://169.254.169.254/latest/meta-dat
   check("empty html yields none", parseDuckDuckGo("<html></html>", 5).length === 0);
 }
 
-// 6) search input validation happens before any network call
+// 6) Bing parsing: b_algo blocks + /ck/a redirect unwrapping
+{
+  const wrapped = Buffer.from("https://example.com/real").toString("base64").replace(/\+/g,"-").replace(/\//g,"_");
+  const fixture = `
+    <li class="b_algo"><h2><a href="/ck/a?u=a1${wrapped}&amp;x=1">示例<b>标题</b></a></h2><p>这是摘要一。</p></li>
+    <li class="b_algo"><h2><a href="https://direct.example.org/a">直接链接</a></h2><p>摘要二</p></li>
+    <li class="b_algo"><h2>没有链接</h2><p>跳过</p></li>
+  `;
+  const results = parseBing(fixture, 5);
+  check("bing parses results", results.length === 2, String(results.length));
+  check("bing unwraps redirect", results[0]?.url === "https://example.com/real", results[0]?.url);
+  check("bing keeps direct url", results[1]?.url === "https://direct.example.org/a", results[1]?.url);
+  check("bing title readable", (results[0]?.title ?? "").replace(/\s+/g, "") === "示例标题", results[0]?.title);
+  check("bing snippet captured", results[0]?.snippet.includes("摘要一"), results[0]?.snippet);
+  check("bing skips malformed block", results.every((r) => r.url && r.title));
+  check("bing respects limit", parseBing(fixture, 1).length === 1);
+}
+
+// 7) search input validation happens before any network call
 {
   let blocked = false;
   try { await runSearch(""); } catch (e) { blocked = /为空/.test(e.message); }
