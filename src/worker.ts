@@ -15,6 +15,7 @@ import { summarizeThread } from "./summary.ts";
 import { withRetry } from "./retry.ts";
 import { PI_CLI, piArgs, piEnv } from "./config.ts";
 import { renderContractsPrompt, renderPersonaPrompt } from "./persona.ts";
+import { LoopGuard, extractArgs } from "./loop-guard.ts";
 import type { RuntimeConfig } from "./config.ts";
 
 export type RunHooks = {
@@ -168,6 +169,10 @@ async function runAttempt(
   const rootSpan = store.startSpan(task.id, "task", `attempt ${attempt}`);
   const toolSpans = new Map<string, number>();
 
+  // A stuck agent looks busy until the wall clock fires. The guard watches the *shape* of the
+  // tool calls instead: identical fingerprints in a row mean no progress was made.
+  const loopGuard = new LoopGuard();
+
   rpc.on("record", (record: RpcRecord) => {
     // Only records that cannot be reconstructed are persisted; streaming deltas are dropped.
     const persisted = persistRecord(record, cfg.eventPayloadMax ?? 2000);
@@ -203,6 +208,23 @@ async function runAttempt(
       hooks.onStatus?.(`tool → ${name}`);
 
       const callId = String(record.toolCallId ?? record.id ?? "");
+      if (record.type === "tool_execution_start") {
+        const decision = loopGuard.observe(name, extractArgs(record as Record<string, unknown>));
+        if (decision.level === "warn") {
+          hooks.onStatus?.(`loop guard: ${decision.reason}`);
+          store.appendEvent(task.id, "loop_warn", { reason: decision.reason, count: decision.count });
+        }
+        if (decision.level === "abort") {
+          hooks.onStatus?.(`loop guard: ${decision.reason}`);
+          store.appendEvent(task.id, "loop_abort", {
+            reason: decision.reason,
+            count: decision.count,
+            seen: loopGuard.seen.slice(-10),
+          });
+          lastError = `检测到重复调用：${decision.reason}`;
+          void rpc.dispose();
+        }
+      }
       if (record.type === "tool_execution_start" && callId) {
         toolSpans.set(callId, store.startSpan(task.id, "tool", name, rootSpan, { toolCallId: callId }));
       }
