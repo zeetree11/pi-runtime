@@ -51,6 +51,18 @@ const TOOLS = [
     },
   },
   {
+    name: "send",
+    description:
+      "在任务执行过程中主动给用户发一条消息（进度、中间结论、需要等待的原因）。" +
+      "一次任务最多 3 条，每条不超过 600 字符。最终结论仍然通过正常回复给出，不要用 send 代替最终答复。",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string", description: "要发送的内容（简短）。" } },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "note_read",
     description: "读取本轮子任务已经写下的共享便签。开始工作前先读，避免重复别人已经查过的部分。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -106,6 +118,11 @@ async function handle(message) {
       if (name === "note_write") {
         await call("/notes", { scope: SCOPE || "default", key: args.key, value: args.value, by: `depth${DEPTH}` });
         reply(id, { content: [{ type: "text", text: `已记录：${args.key}` }], isError: false });
+        return;
+      }
+      if (name === "send") {
+        const result = await call("/send", { text: args.text });
+        reply(id, { content: [{ type: "text", text: `已发送（本次还剩 ${result.remaining} 条额度）` }], isError: false });
         return;
       }
       if (name === "note_read") {

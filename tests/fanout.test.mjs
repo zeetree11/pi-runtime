@@ -145,6 +145,61 @@ const note = (key, value, by, minutes = 0) => ({
   const noteRead = await fetch(`http://127.0.0.1:${server.port}/notes/read`, { method: "POST" }).then((r) => r.json());
   check("note read returns text", typeof noteRead.text === "string" && noteRead.text.length > 0, noteRead.text);
 
+  // 6) proactive send: bound session, quota, target guard
+  {
+    const sent = [];
+    server.setSession("feishu:oc_9", async (text) => { sent.push(text); });
+
+    const first = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "进度：正在查第一个来源" }),
+    }).then((r) => r.json());
+    check("send delivers", first.ok === true && first.remaining === 2, JSON.stringify(first));
+    check("sender saw the text", sent.length === 1 && sent[0].includes("进度"), JSON.stringify(sent));
+
+    const empty = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "   " }),
+    });
+    check("empty send rejected", empty.status === 400, String(empty.status));
+
+    const cross = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "给别的群发", thread: "qq:group:1" }),
+    });
+    check("cross-session send refused", cross.status === 403, String(cross.status));
+
+    await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "第二条" }),
+    });
+    await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "第三条" }),
+    });
+    const fourth = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "第四条" }),
+    });
+    check("quota stops the fourth send", fourth.status === 429, String(fourth.status));
+    check("quota counts three", sent.length === 3, String(sent.length));
+
+    // A new task resets the quota.
+    server.setSession("feishu:oc_9", async (text) => { sent.push(text); });
+    const afterReset = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "新任务第一条" }),
+    }).then((r) => r.json());
+    check("new session resets quota", afterReset.ok === true && afterReset.remaining === 2, JSON.stringify(afterReset));
+  }
+
   await server.close();
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* Windows handle */ }
 }

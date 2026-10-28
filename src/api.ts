@@ -26,10 +26,17 @@ export type FanoutDeps = {
   concurrency?: number;
   /** Thread the children belong to; also the parent task's thread. */
   defaultThread?: string;
+  /** Deliver a proactive message to the user. Set by the channel adapter per incoming message. */
+  sendText?: (text: string) => Promise<void>;
   log?: (message: string) => void;
 };
 
-export type ControlServer = { port: number; close: () => Promise<void> };
+export type ControlServer = {
+  port: number;
+  /** Bind the sender + reset the quota for the task that is starting. */
+  setSession: (thread: string, sendText: (text: string) => Promise<void>) => void;
+  close: () => Promise<void>;
+};
 
 const MAX_BODY = 256 * 1024;
 
@@ -61,6 +68,15 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
   let currentScope = "default";
   let running = false;
 
+  // Proactive sends are quota-limited per task. `send` exists so a long task can report
+  // progress; without a cap it becomes a second, unchosen reply stream — and the user has no
+  // way to tell which message is the answer.
+  const MAX_SENDS = Number(process.env.PI_RT_SEND_MAX ?? 3);
+  const MAX_SEND_CHARS = Number(process.env.PI_RT_SEND_CHARS ?? 600);
+  let sendCount = 0;
+  let sendWindowThread = "";
+  let sender: ((text: string) => Promise<void>) | null = null;
+
   const server = createServer((request, response) => {
     const url = request.url ?? "/";
     void (async () => {
@@ -78,6 +94,54 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           }
           const text = notes.map((note) => `- ${note.key}: ${note.value}（${note.by}）`).join("\n");
           json(response, 200, { text });
+          return;
+        }
+
+        // The channel adapter registers the sender for the message it is currently answering,
+        // and resets the quota. One sender at a time is correct here: tasks are serialised per
+        // thread, and a proactive message must go to the conversation that asked for it.
+        if (request.method === "POST" && url === "/send/session") {
+          const body = await readJson(request);
+          const thread = String(body.thread ?? "");
+          if (!thread) {
+            json(response, 400, { error: "thread 必填" });
+            return;
+          }
+          sendWindowThread = thread;
+          sendCount = 0;
+          sender = deps.sendText ?? null;
+          json(response, 200, { ok: Boolean(sender), thread });
+          return;
+        }
+
+        if (request.method === "POST" && url === "/send") {
+          const body = await readJson(request);
+          const text = String(body.text ?? "").trim();
+          if (!text) {
+            json(response, 400, { error: "text 必填" });
+            return;
+          }
+          if (text.length > MAX_SEND_CHARS) {
+            json(response, 400, { error: `消息过长（上限 ${MAX_SEND_CHARS} 字符），请只发结论` });
+            return;
+          }
+          const target = body.thread ? String(body.thread) : sendWindowThread;
+          if (target && target !== sendWindowThread) {
+            json(response, 403, { error: "只能发往当前会话" });
+            return;
+          }
+          if (!sender) {
+            json(response, 409, { error: "没有可用的发送通道" });
+            return;
+          }
+          if (sendCount >= MAX_SENDS) {
+            // Refuse instead of silently dropping: the model should know it hit the cap.
+            json(response, 429, { error: `本次任务最多主动发送 ${MAX_SENDS} 条，已用完` });
+            return;
+          }
+          await sender(text);
+          sendCount += 1;
+          json(response, 200, { ok: true, remaining: MAX_SENDS - sendCount });
           return;
         }
 
@@ -168,6 +232,11 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
       const actual = (server.address() as { port: number }).port;
       resolve({
         port: actual,
+        setSession: (thread, sendText) => {
+          sendWindowThread = thread;
+          sendCount = 0;
+          sender = sendText;
+        },
         close: () => new Promise<void>((done) => server.close(() => done())),
       });
     });

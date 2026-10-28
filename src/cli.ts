@@ -995,6 +995,9 @@ async function cmdServe(args: string[]): Promise<number> {
       return;
     }
     const result = ingest(deps, message);
+    // Bind the proactive sender before the task runs: a `send` tool call must reach the
+    // conversation that is being answered, and the per-task quota restarts here.
+    control.setSession(result.thread, (text) => send(message.chatId, text));
     if (result.duplicate) {
       dim(`duplicate message ${message.messageId} ignored`);
       return;
