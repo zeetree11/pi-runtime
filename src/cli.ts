@@ -20,6 +20,7 @@ import { embedText } from "../mcp/lib/embed.mjs";
 import { ApprovalStore, extractAskDirectives, parseDecision } from "./approval.ts";
 import { NoteStore } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
+import { KnowledgeStore, formatHits } from "./knowledge.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -1476,6 +1477,55 @@ async function main(): Promise<number> {
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
       }
       return 0;
+    }
+    case "knowledge": {
+      const store = new KnowledgeStore(DATA_DIR);
+      const sub = rest[0] ?? "list";
+      if (sub === "list") {
+        const docs = store.list();
+        if (docs.length === 0) {
+          console.log("知识库是空的。用 `knowledge add <文件>` 导入。");
+          return 0;
+        }
+        for (const doc of docs) console.log(`${doc.source}  ${doc.chunks} 段 / ${doc.chars} 字符`);
+        const stats = store.stats();
+        console.log(`— 共 ${stats.documents} 篇，${stats.chunks} 段（模型 ${stats.models.join(",") || "无"}）`);
+        return 0;
+      }
+      if (sub === "add") {
+        const target = rest[1];
+        if (!target) {
+          console.log("用法：knowledge add <文件路径> [-as <名字>]  或  knowledge add - [-as 名字]（从 stdin 读）");
+          return 1;
+        }
+        const alias = flagValue(rest, "--as");
+        const text = target === "-" ? readFileSync(0, "utf8") : readFileSync(target, "utf8");
+        const source = alias ?? (target === "-" ? `stdin-${Date.now()}` : path.basename(target));
+        const result = await store.add(source, text);
+        console.log(`已导入 ${result.source}：${result.chunks} 段（模型 ${result.model}）`);
+        return 0;
+      }
+      if (sub === "search") {
+        const query = rest.slice(1).join(" ").trim();
+        if (!query) {
+          console.log("用法：knowledge search <查询>");
+          return 1;
+        }
+        const hits = await store.search(query, { limit: 5 });
+        console.log(formatHits(hits, query));
+        return 0;
+      }
+      if (sub === "rm") {
+        const source = rest[1];
+        if (!source) {
+          console.log("用法：knowledge rm <source>");
+          return 1;
+        }
+        console.log(store.remove(source) ? `已删除 ${source}` : `没有 ${source}`);
+        return 0;
+      }
+      console.log("用法：knowledge list | add <文件> | search <查询> | rm <source>");
+      return 1;
     }
     case "approvals": {
       const store = new ApprovalStore(DATA_DIR);
