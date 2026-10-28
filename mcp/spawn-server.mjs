@@ -51,6 +51,36 @@ const TOOLS = [
     },
   },
   {
+    name: "lock_file",
+    description:
+      "在改某个文件前先锁住它（路径级租约，默认 10 分钟自动过期）。如果已被别人锁定会返回持有者。" +
+      "改完后用 unlock_file 释放。并发子任务改同一个文件时必须先锁。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "文件路径，例如 src/a.ts 或 /workspace/src/a.ts。" },
+        reason: { type: "string", description: "可选：为什么要改这个文件。" },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "unlock_file",
+    description: "释放自己持有的文件锁。",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string", description: "文件路径。" } },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_locks",
+    description: "列出当前有效的文件锁（谁在改什么）。写文件前可以先看一眼避免撞车。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "send",
     description:
       "在任务执行过程中主动给用户发一条消息（进度、中间结论、需要等待的原因）。" +
@@ -118,6 +148,24 @@ async function handle(message) {
       if (name === "note_write") {
         await call("/notes", { scope: SCOPE || "default", key: args.key, value: args.value, by: `depth${DEPTH}` });
         reply(id, { content: [{ type: "text", text: `已记录：${args.key}` }], isError: false });
+        return;
+      }
+      if (name === "lock_file") {
+        const result = await call("/lock", { path: args.path, reason: args.reason, owner: `depth${DEPTH}` });
+        reply(id, { content: [{ type: "text", text: `已锁定 ${result.lock.path}（到 ${result.lock.expiresAt}）` }], isError: false });
+        return;
+      }
+      if (name === "unlock_file") {
+        const result = await call("/unlock", { path: args.path, owner: `depth${DEPTH}` });
+        reply(id, { content: [{ type: "text", text: result.released ? "已释放" : "没有你持有的该锁" }], isError: false });
+        return;
+      }
+      if (name === "list_locks") {
+        const result = await call("/locks", {});
+        const text = result.locks.length === 0
+          ? "（当前没有文件锁）"
+          : result.locks.map((lock) => `- ${lock.path} ← ${lock.owner}（到 ${lock.expiresAt}）`).join("\n");
+        reply(id, { content: [{ type: "text", text }], isError: false });
         return;
       }
       if (name === "send") {

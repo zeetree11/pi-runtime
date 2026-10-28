@@ -19,6 +19,7 @@ import { enforceBrevity } from "./brevity.ts";
 import { embedText } from "../mcp/lib/embed.mjs";
 import { ApprovalStore, extractAskDirectives, parseDecision } from "./approval.ts";
 import { NoteStore } from "./fanout.ts";
+import { FileLockStore } from "./file-lock.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -954,6 +955,7 @@ async function cmdServe(args: string[]): Promise<number> {
   const fanoutGate = new Gate(3, 0);
   const control = await startControlServer({
     notes: new NoteStore(DATA_DIR),
+    locks: new FileLockStore(DATA_DIR),
     defaultThread: "fanout",
     log: (message) => dim(message),
     runChild: async ({ prompt, thread, index }) => {

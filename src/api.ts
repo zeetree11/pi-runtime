@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { buildFanoutDigest, NoteStore, retryPrompt, shouldRetry, type Note } from "./fanout.ts";
+import { FileLockStore } from "./file-lock.ts";
 import { buildSplitPrompt, parseSubtasks, runWithLimit, type ChildSpec } from "./subagent.ts";
 
 /**
@@ -28,6 +29,8 @@ export type FanoutDeps = {
   defaultThread?: string;
   /** Deliver a proactive message to the user. Set by the channel adapter per incoming message. */
   sendText?: (text: string) => Promise<void>;
+  /** Advisory path locks shared by fan-out children. */
+  locks?: FileLockStore;
   log?: (message: string) => void;
 };
 
@@ -142,6 +145,39 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           await sender(text);
           sendCount += 1;
           json(response, 200, { ok: true, remaining: MAX_SENDS - sendCount });
+          return;
+        }
+
+        if (request.method === "POST" && (url === "/lock" || url === "/unlock" || url === "/locks")) {
+          if (!deps.locks) {
+            json(response, 503, { error: "锁服务未启用" });
+            return;
+          }
+          const body = await readJson(request);
+          if (url === "/locks") {
+            json(response, 200, { locks: deps.locks.list() });
+            return;
+          }
+          const owner = String(body.owner ?? "child");
+          if (url === "/unlock") {
+            json(response, 200, { released: deps.locks.release({ path: String(body.path ?? ""), owner }) });
+            return;
+          }
+          const result = deps.locks.acquire({
+            path: String(body.path ?? ""),
+            owner,
+            reason: body.reason ? String(body.reason) : null,
+            ttlMinutes: body.ttlMinutes ? Number(body.ttlMinutes) : undefined,
+          });
+          if (!result.ok) {
+            // 409 with the holder is the useful answer: the child can wait, or pick another file.
+            json(response, 409, {
+              error: `${result.heldBy.path} 已被 ${result.heldBy.owner} 锁定（到 ${result.heldBy.expiresAt}）`,
+              heldBy: result.heldBy,
+            });
+            return;
+          }
+          json(response, 200, { ok: true, lock: result.lock });
           return;
         }
 
