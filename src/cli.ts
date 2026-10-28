@@ -23,6 +23,7 @@ import { FileLockStore } from "./file-lock.ts";
 import { KnowledgeStore, formatHits } from "./knowledge.ts";
 import { ProposalStore } from "./proposal.ts";
 import { FeedbackStore, appendCases, isComplaint } from "./feedback.ts";
+import { discoverSkills, formatSkills } from "./skills.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -1504,6 +1505,17 @@ async function main(): Promise<number> {
       for (const { row, score } of hits) {
         console.log(`${score.toFixed(3)}  ${row.content}`);
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
+      }
+      return 0;
+    }
+    case "skills": {
+      const workspace = process.env.PI_RT_WORKSPACE ?? path.join(DATA_DIR, "workspace");
+      const skills = discoverSkills({ home: DATA_DIR, cwd: workspace, repoRoot: workspace });
+      console.log(formatSkills(skills));
+      const missing = skills.filter((skill) => !skill.description);
+      if (missing.length > 0) {
+        console.log(`\n⚠️ ${missing.length} 个 skill 缺 description：模型只能看到名字，几乎不会被选中。`);
+        return 1;
       }
       return 0;
     }
