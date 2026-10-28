@@ -222,10 +222,10 @@ node src/cli.ts resolve user_birth_city 7       # 裁决争议槽位
 
 ```
 有桌面的机器（Windows 本机）  → deploy/qq.md，NapCat 或 SnowLuma 都行
-无桌面的云服务器（7×24）      → deploy/qq-desktop/README.md，noVNC 造虚拟桌面
+无桌面的云服务器（7×24）      → deploy/qq-desktop/README.md，SnowLuma 官方镜像 + noVNC
 ```
 
-云上那份文档记录了六个必踩的坑（端口只绑 loopback、重建容器丢登录态、HTTP/WS 分端口、URL 结尾斜杠、分体 token、内存到顶），照着走能省半天。
+云上那份文档用官方镜像把 QQ + SnowLuma 压在大约 250MB，并记录了端口绑定、登录态、分体 token 和 swappiness 这几件事。不要再构建自带 `LIBGL_ALWAYS_SOFTWARE=1` 的桌面镜像。
 
 QQ 通道额外支持三种「叫它」的方式，都通过环境变量配置：
 
