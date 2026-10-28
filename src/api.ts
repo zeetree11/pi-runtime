@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { buildFanoutDigest, NoteStore, retryPrompt, shouldRetry, type Note } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
+import { ProposalStore } from "./proposal.ts";
 import { buildSplitPrompt, parseSubtasks, runWithLimit, type ChildSpec } from "./subagent.ts";
 
 /**
@@ -31,6 +32,8 @@ export type FanoutDeps = {
   sendText?: (text: string) => Promise<void>;
   /** Advisory path locks shared by fan-out children. */
   locks?: FileLockStore;
+  /** Controlled self-modification: persona files and MCP server entries. */
+  proposals?: ProposalStore;
   log?: (message: string) => void;
 };
 
@@ -145,6 +148,62 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           await sender(text);
           sendCount += 1;
           json(response, 200, { ok: true, remaining: MAX_SENDS - sendCount });
+          return;
+        }
+
+        // Self-modification requests: validate, store as pending, tell the user how to approve.
+        // Nothing is applied here — the approval reply is what triggers `apply`.
+        if (request.method === "POST" && url === "/proposal") {
+          if (!deps.proposals) {
+            json(response, 503, { error: "自改通道未启用" });
+            return;
+          }
+          const body = await readJson(request);
+          const thread = sendWindowThread || "default";
+          const rationale = String(body.rationale ?? "").trim();
+          if (!rationale) {
+            json(response, 400, { error: "必须写理由（rationale），否则用户无法判断该不该批" });
+            return;
+          }
+
+          const kind = String(body.kind ?? "persona");
+          const requested =
+            kind === "mcp"
+              ? deps.proposals.requestMcp({
+                  thread,
+                  rationale,
+                  server: {
+                    name: String(body.name ?? ""),
+                    command: String(body.command ?? ""),
+                    args: Array.isArray(body.args) ? body.args.map(String) : undefined,
+                    env: body.env && typeof body.env === "object" ? (body.env as Record<string, string>) : undefined,
+                    exposure: body.exposure ? String(body.exposure) : undefined,
+                    description: body.description ? String(body.description) : undefined,
+                  },
+                })
+              : deps.proposals.request({
+                  thread,
+                  rationale,
+                  path: String(body.path ?? ""),
+                  content: String(body.content ?? ""),
+                });
+
+          if (!requested.ok) {
+            json(response, 400, { error: requested.reason });
+            return;
+          }
+
+          const proposal = requested.proposal;
+          const what = proposal.path.startsWith("mcp:")
+            ? `给自装上 MCP server「${proposal.path.slice(4)}」`
+            : `修改 ${proposal.path}`;
+          const message = [
+            `我想${what}。`,
+            `理由：${proposal.rationale}`,
+            `回复「同意」我就改，回复「拒绝」保持原样（30 分钟内有效）。`,
+          ].join("\n");
+          if (sender) await sender(message);
+          json(response, 200, { ok: true, id: proposal.id, status: proposal.status, preview: message });
           return;
         }
 

@@ -21,6 +21,7 @@ import { ApprovalStore, extractAskDirectives, parseDecision } from "./approval.t
 import { NoteStore } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
 import { KnowledgeStore, formatHits } from "./knowledge.ts";
+import { ProposalStore } from "./proposal.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -949,6 +950,7 @@ async function cmdServe(args: string[]): Promise<number> {
   // Reminders are channel-agnostic: the token is parsed in the shared handler, and each channel
   // only has to provide a way to deliver one message.
   const reminderStore = new ReminderStore(DATA_DIR);
+  const proposals = new ProposalStore(DATA_DIR);
 
   // Fan-out control API. The agent reaches it through the `fanout` MCP tool; the runtime stays the
   // only owner of the task queue. Children run on their own threads (`#subN`) so their context and
@@ -957,6 +959,7 @@ async function cmdServe(args: string[]): Promise<number> {
   const control = await startControlServer({
     notes: new NoteStore(DATA_DIR),
     locks: new FileLockStore(DATA_DIR),
+    proposals,
     defaultThread: "fanout",
     log: (message) => dim(message),
     runChild: async ({ prompt, thread, index }) => {
@@ -969,6 +972,24 @@ async function cmdServe(args: string[]): Promise<number> {
 
   // One handler for every transport: identity → event → run → reply → maybe distil.
   const handler = async (message: Incoming, send: (chatId: string, text: string) => Promise<void>) => {
+    // Self-modification proposals are decided before anything else: "同意" here means "change
+    // your own capability surface", which must not be confused with a tool approval.
+    const pendingProposal = proposals.pendingFor(`${message.channel}:${message.chatId}`);
+    const proposalDecision = pendingProposal ? parseDecision(message.text) : null;
+    if (pendingProposal && proposalDecision) {
+      const result =
+        proposalDecision === "approved" ? proposals.apply(pendingProposal.id) : proposals.reject(pendingProposal.id);
+      const isMcp = pendingProposal.path.startsWith("mcp:");
+      const label = isMcp ? `MCP server「${pendingProposal.path.slice(4)}」` : pendingProposal.path;
+      await send(
+        message.chatId,
+        result?.status === "applied"
+          ? `好，已应用：${label}。${isMcp ? "下一条消息起这个工具可用。" : "下一轮对话起生效。"}`
+          : `好，没动：${label}。`,
+      );
+      return;
+    }
+
     // A reply of "同意"/"拒绝" belongs to a parked approval, not to a new task. Checked before
     // ingest so the decision never pollutes the conversation as a user turn.
     const pendingApproval = approvals.pendingFor(`${message.channel}:${message.chatId}`);
@@ -1477,6 +1498,38 @@ async function main(): Promise<number> {
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
       }
       return 0;
+    }
+    case "proposals": {
+      const store = new ProposalStore(DATA_DIR);
+      store.expire();
+      const rows = store.listPending();
+      if (rows.length === 0) {
+        console.log("没有待确认的自改申请");
+        return 0;
+      }
+      for (const row of rows) {
+        const left = Math.max(0, Math.round((new Date(row.createdAt).getTime() + 30 * 60_000 - Date.now()) / 1000));
+        console.log(`#${row.id}  ${row.path}  ${row.rationale.slice(0, 40)}  （约 ${left}s 内有效）`);
+      }
+      return 0;
+    }
+    case "proposal-apply":
+    case "proposal-reject":
+    case "proposal-revert": {
+      const store = new ProposalStore(DATA_DIR);
+      const id = Number(rest[0]);
+      if (!Number.isInteger(id)) {
+        console.log(`用法：${command} <id>`);
+        return 1;
+      }
+      const result =
+        command === "proposal-apply"
+          ? store.apply(id)
+          : command === "proposal-reject"
+            ? store.reject(id)
+            : store.revert(id);
+      console.log(result ? `#${id} → ${result.status}` : `#${id} 不存在或状态不允许该操作`);
+      return result ? 0 : 1;
     }
     case "knowledge": {
       const store = new KnowledgeStore(DATA_DIR);

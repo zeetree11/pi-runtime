@@ -81,6 +81,28 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "propose_self_edit",
+    description:
+      "申请修改你自己的能力面：人格文件（persona/SOUL.md、persona/CONTRACTS.md）或新增/替换一个 MCP server。" +
+      "运行时不会立即生效，会先问用户，用户回「同意」才应用。改不了运行时代码（src/**）。" +
+      "有明确理由时才用，理由要能让人判断该不该批。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["persona", "mcp"], description: "persona=改人格文件；mcp=加工具服务器。" },
+        path: { type: "string", description: "kind=persona 时必填，例如 persona/SOUL.md。" },
+        content: { type: "string", description: "kind=persona 时必填，完整的文件新内容。" },
+        name: { type: "string", description: "kind=mcp 时必填，server 名（小写 a-z0-9_-）。" },
+        command: { type: "string", description: "kind=mcp 时必填，只能是 node/npx/uvx/python3/deno/bun。" },
+        args: { type: "array", items: { type: "string" }, description: "kind=mcp 时的参数，路径必须在 /workspace 内。" },
+        description: { type: "string", description: "kind=mcp 时的一句话说明。" },
+        rationale: { type: "string", description: "为什么需要这个改动（必填）。" },
+      },
+      required: ["kind", "rationale"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "send",
     description:
       "在任务执行过程中主动给用户发一条消息（进度、中间结论、需要等待的原因）。" +
@@ -166,6 +188,23 @@ async function handle(message) {
           ? "（当前没有文件锁）"
           : result.locks.map((lock) => `- ${lock.path} ← ${lock.owner}（到 ${lock.expiresAt}）`).join("\n");
         reply(id, { content: [{ type: "text", text }], isError: false });
+        return;
+      }
+      if (name === "propose_self_edit") {
+        const result = await call("/proposal", {
+          kind: args.kind,
+          path: args.path,
+          content: args.content,
+          name: args.name,
+          command: args.command,
+          args: args.args,
+          description: args.description,
+          rationale: args.rationale,
+        });
+        reply(id, {
+          content: [{ type: "text", text: `已提交申请 #${result.id}，等待用户确认。\n\n${result.preview}` }],
+          isError: false,
+        });
         return;
       }
       if (name === "send") {
