@@ -9,7 +9,13 @@ import { execSync } from "node:child_process";
 const PATTERNS = [
   // 0.0.0.0 and 255.255.255.255 are bind/broadcast addresses, not hosts: documentation about
   // listening on all interfaces should not look like a leaked server address.
-  { name: "公网 IPv4", re: /\b(?!0\.0\.0\.0\b|255\.255\.255\.255\b|10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)(?:\d{1,3}\.){3}\d{1,3}\b/ },
+  // Every reserved range is excluded, not just the RFC1918 trio: a blocklist for SSRF legitimately
+  // contains link-local (169.254.x, cloud metadata) and CGNAT (100.64/10) addresses, and flagging
+  // those as "leaked public IP" punishes exactly the code that is doing the right thing.
+  {
+    name: "公网 IPv4",
+    re: /\b(?!0\.0\.0\.0\b|255\.255\.255\.255\b|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)(?:\d{1,3}\.){3}\d{1,3}\b/,
+  },
   { name: "飞书 open_id", re: /\bou_[0-9a-f]{16,}\b/ },
   { name: "飞书 app_id", re: /\bcli_[a-z0-9]{10,}\b/ },
   { name: "飞书 app_secret", re: /\b[A-Za-z0-9]{16,}\b(?=.*app_secret)|app_secret\s*[=:]\s*\S{8,}/i },
