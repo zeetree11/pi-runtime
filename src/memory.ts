@@ -2,11 +2,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { detectSecret } from "./secrets.ts";
+import { scoreConfidence } from "./confidence.ts";
 import { blobToVector as toVector, cosine } from "../mcp/lib/embed.mjs";
 
 export type MemoryCategory = "preference" | "fact" | "event";
 export type MemoryAction = "create" | "correct" | "invalidate" | "contest";
-export type MemoryStatus = "active" | "superseded" | "invalidated" | "contested";
+export type MemoryStatus = "active" | "tentative" | "superseded" | "invalidated" | "contested";
 
 /** Who the memory is about. Pronouns are forbidden in the extractor output. */
 export type TargetType = "current_speaker" | "named_member" | "current_group" | "self";
@@ -295,8 +296,43 @@ export class MemoryStore {
 
     let action: MemoryAction = ACTIONS.includes(write.action) ? write.action : "create";
     let note = write.reason ?? "";
+    let tentativeStatus: MemoryStatus = "active";
 
     if (action === "create") {
+      // Confidence gate — only for distilled claims.
+      //
+      // A memory extracted from a conversation is a *claim about* the user, and the risk is a
+      // hedged or weakly-grounded sentence ("可能会用 SQLite") being treated as fact. A memory
+      // written by the operator (`remember --key ...`) is the user asserting it directly; scoring
+      // it would just mean refusing to store what someone typed on purpose.
+      //
+      // Three outcomes when the gate runs: trust it, keep it `tentative` (never injected), or
+      // refuse to store the row (the event layer keeps the original text either way).
+      if (write.evidenceEventId) {
+        const prior = this.db.prepare("SELECT COUNT(*) n FROM memories WHERE key = ?").get(key) as { n: number };
+        const confidence = scoreConfidence({
+          category: category as "preference" | "fact" | "event",
+          fromUser: true, // distillation already rejects assistant-authored evidence
+          text: write.content,
+          confirmations: Number(prior?.n ?? 0) + 1,
+        });
+        if (confidence.status === "discard") {
+          return {
+            applied: false,
+            action: "create",
+            id: null,
+            key,
+            reason: `置信度 ${confidence.score.toFixed(2)} 过低，未写入（${confidence.factors.join("；")}）`,
+            content: null,
+          } as ApplyResult;
+        }
+        if (confidence.status === "tentative") {
+          note = [note, `待定 ${confidence.score.toFixed(2)}：${confidence.factors.join("；")}`].filter(Boolean).join(" | ");
+          tentativeStatus = "tentative";
+        } else {
+          note = [note, `置信度 ${confidence.score.toFixed(2)}`].filter(Boolean).join(" | ");
+        }
+      }
       if (target) {
         action = "correct";
         note = `create 降级为 correct：key ${key} 已有活跃记忆 #${target.id}`;
@@ -349,7 +385,7 @@ export class MemoryStore {
           source_task_id, thread, created_at, updated_at, use_count)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0)`,
       );
-      const status: MemoryStatus = action === "contest" ? "contested" : "active";
+      const status: MemoryStatus = action === "contest" ? "contested" : tentativeStatus;
 
       if ((action === "correct" || action === "contest") && target) {
         // Free the active slot before inserting: one active row per key.

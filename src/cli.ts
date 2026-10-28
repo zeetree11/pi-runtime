@@ -944,6 +944,9 @@ async function cmdServe(args: string[]): Promise<number> {
     .filter(Boolean);
   // Approvals are parked per thread: the agent asks, the user answers, the task resumes.
   const approvals = new ApprovalStore(DATA_DIR);
+  // Reminders are channel-agnostic: the token is parsed in the shared handler, and each channel
+  // only has to provide a way to deliver one message.
+  const reminderStore = new ReminderStore(DATA_DIR);
 
   // Fan-out control API. The agent reaches it through the `fanout` MCP tool; the runtime stays the
   // only owner of the task queue. Children run on their own threads (`#subN`) so their context and
@@ -1013,9 +1016,27 @@ async function cmdServe(args: string[]): Promise<number> {
         { onStatus: dim, recordUserEvent: false },
         memory,
       );
+      // Reminder tokens are parsed here rather than per channel: otherwise the QQ branch owned
+      // the only parser and Feishu could never schedule one.
+      const reminderDirectives = extractReminderDirectives(reply);
+      for (const directive of reminderDirectives.reminders) {
+        const dueAt = parseWhen(directive.when);
+        if (!dueAt || dueAt.getTime() <= Date.now()) continue;
+        if (reminderStore.findDuplicate(result.thread, directive.text, dueAt)) continue;
+        reminderStore.add({
+          thread: result.thread,
+          channel: message.channel,
+          chatId: message.chatId,
+          text: directive.text,
+          dueAt,
+        });
+        dim(`提醒已登记：${directive.text} @ ${dueAt.toISOString()}`);
+      }
+      const replyAfterReminders = reminderDirectives.cleaned;
+
       // An `<!--ask: ...-->` token parks the task: the question is what the user sees, and the
       // original request is stored so a "同意" can resume it without copy-paste.
-      const asks = extractAskDirectives(reply);
+      const asks = extractAskDirectives(replyAfterReminders);
       if (asks.asks.length > 0) {
         const approval = approvals.request({
           thread: result.thread,
@@ -1028,7 +1049,7 @@ async function cmdServe(args: string[]): Promise<number> {
         if (asks.cleaned) await send(message.chatId, approval.prompt);
         return;
       }
-      await send(message.chatId, reply);
+      await send(message.chatId, replyAfterReminders);
       const pending = store.pendingTurnCount(result.thread);
       if (pending >= cfg.batchTurns) {
         dim(`累积 ${pending} 轮，提炼记忆…`);
@@ -1112,10 +1133,10 @@ async function cmdServe(args: string[]): Promise<number> {
       console.log(`qq (onebot) -> ${process.env.QQ_WS_URL ?? "ws://127.0.0.1:3001"} - ctrl+c to stop`);
       // Reminders are the one thing the runtime pushes without being spoken to, so the loop
       // owns its own timer and reuses the same send path as a normal reply.
-      const reminderStore = new ReminderStore(DATA_DIR);
       const stopReminders = setInterval(() => {
         void (async () => {
           for (const reminder of reminderStore.due()) {
+            if (reminder.channel !== "qq") continue;
             try {
               await client.send(sendTargetFromChatId(reminder.chatId), `⏰ ${reminder.text}`);
               reminderStore.markFired(reminder.id);
@@ -1132,19 +1153,11 @@ async function cmdServe(args: string[]): Promise<number> {
         (message) =>
           handler(oneBotToIncoming(message) as Incoming, async (_chatId, text) => {
             const incoming = oneBotToIncoming(message);
-            const thread = `${incoming.channel}:${incoming.chatId}`;
-            const { reminders: directives, cleaned } = extractReminderDirectives(text);
-            for (const directive of directives) {
-              const dueAt = parseWhen(directive.when);
-              if (!dueAt || dueAt.getTime() <= Date.now()) continue;
-              if (reminderStore.findDuplicate(thread, directive.text, dueAt)) continue;
-              reminderStore.add({ thread, channel: incoming.channel, chatId: incoming.chatId, text: directive.text, dueAt });
-            }
             // Length is a product decision, not a model preference: SOUL.md says "短句" and the
             // model still wrote 200-character answers. The cap is mechanical, and it steps aside
             // when the user actually asked for detail.
-            const brevity = enforceBrevity(cleaned, incoming.chatType === "group" ? "group" : "dm", incoming.text);
-            if (brevity.trimmed) dim(`[简短化 ${cleaned.length} → ${brevity.text.length} 字：${brevity.reason ?? ""}]`);
+            const brevity = enforceBrevity(text, incoming.chatType === "group" ? "group" : "dm", incoming.text);
+            if (brevity.trimmed) dim(`[简短化 ${text.length} → ${brevity.text.length} 字：${brevity.reason ?? ""}]`);
             await client.send(sendTargetFromChatId(message.chatId), brevity.text);
           }),
         controller.signal,
@@ -1205,6 +1218,24 @@ async function cmdServe(args: string[]): Promise<number> {
       return 1;
     }
     console.log("feishu long connection starting — ctrl+c to stop");
+    // Same delivery loop as QQ, against the Feishu client. Without this, reminders scheduled in
+    // a Feishu conversation were written to the database and never delivered.
+    const stopFeishuReminders = setInterval(() => {
+      void (async () => {
+        for (const reminder of reminderStore.due()) {
+          if (reminder.channel !== "feishu") continue;
+          try {
+            await sender!.send(reminder.chatId, `⏰ ${reminder.text}`);
+            reminderStore.markFired(reminder.id);
+          } catch (error) {
+            console.error(`reminder ${reminder.id} 发送失败：${(error as Error).message}`);
+          }
+        }
+      })();
+    }, 30_000);
+    controller.signal.addEventListener("abort", () => clearInterval(stopFeishuReminders));
+    reminderStore.pending().length > 0 &&
+      console.log(`待触发提醒 ${reminderStore.pending().length} 条`);
     await sender!.serve((message) => handler(message, (chatId, text) => sender!.send(chatId, text)));
     await new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve()));
     sender!.close();
