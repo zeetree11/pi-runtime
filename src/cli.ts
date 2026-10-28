@@ -24,6 +24,7 @@ import { KnowledgeStore, formatHits } from "./knowledge.ts";
 import { ProposalStore } from "./proposal.ts";
 import { FeedbackStore, appendCases, isComplaint } from "./feedback.ts";
 import { discoverSkills, formatSkills } from "./skills.ts";
+import { extractAttachments, softenMention } from "./attachments.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -1090,7 +1091,23 @@ async function cmdServe(args: string[]): Promise<number> {
         if (asks.cleaned) await send(message.chatId, approval.prompt);
         return;
       }
-      await send(message.chatId, replyAfterReminders);
+      // Deterministic attachment fallback: if the reply names a workspace file, deliver it even
+      // when the model forgot to use `send`. Instruction-following is not a guarantee; reading the
+      // reply is.
+      let finalReply = replyAfterReminders;
+      if (media) {
+        const attachments = extractAttachments(replyAfterReminders, { workspace: cfg.workspace, max: 2 });
+        for (const attachment of attachments) {
+          try {
+            await media(message.chatId, attachment.path, undefined);
+            dim(`附件已发送：${attachment.path}（${(attachment.bytes / 1024).toFixed(1)}KB）`);
+          } catch (error) {
+            dim(`附件发送失败：${(error as Error).message}`);
+          }
+        }
+        if (attachments.length > 0) finalReply = softenMention(replyAfterReminders, attachments, cfg.workspace);
+      }
+      await send(message.chatId, finalReply);
       const pending = store.pendingTurnCount(result.thread);
       if (pending >= cfg.batchTurns) {
         dim(`累积 ${pending} 轮，提炼记忆…`);
