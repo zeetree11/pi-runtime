@@ -105,12 +105,17 @@ const TOOLS = [
   {
     name: "send",
     description:
-      "在任务执行过程中主动给用户发一条消息（进度、中间结论、需要等待的原因）。" +
-      "一次任务最多 3 条，每条不超过 600 字符。最终结论仍然通过正常回复给出，不要用 send 代替最终答复。",
+      "在任务执行过程中主动给用户发一条消息，或发送 /workspace 里的一个文件/图片。" +
+      "一次任务最多 3 条。最终结论仍然通过正常回复给出，不要用 send 代替最终答复。" +
+      "用户要图片、截图、文档、生成的文件时，用 path 发送，而不是只告诉他路径——" +
+      "路径在容器里，用户看不到。",
     inputSchema: {
       type: "object",
-      properties: { text: { type: "string", description: "要发送的内容（简短）。" } },
-      required: ["text"],
+      properties: {
+        text: { type: "string", description: "要发送的文字（text 与 path 至少一个）。" },
+        path: { type: "string", description: "要发送的文件路径，必须在 /workspace 内，例如 /workspace/out.png。" },
+        caption: { type: "string", description: "可选：随文件附一句说明。" },
+      },
       additionalProperties: false,
     },
   },
@@ -208,8 +213,10 @@ async function handle(message) {
         return;
       }
       if (name === "send") {
-        const result = await call("/send", { text: args.text });
-        reply(id, { content: [{ type: "text", text: `已发送（本次还剩 ${result.remaining} 条额度）` }], isError: false });
+        if (!args.text && !args.path) throw new Error("text 或 path 至少一个");
+        const result = await call("/send", { text: args.text, path: args.path, caption: args.caption });
+        const what = result.kind === "file" ? `文件（${result.bytes} 字节）` : "消息";
+        reply(id, { content: [{ type: "text", text: `已发送${what}（本次还剩 ${result.remaining} 条额度）` }], isError: false });
         return;
       }
       if (name === "note_read") {

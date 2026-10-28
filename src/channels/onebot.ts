@@ -174,8 +174,7 @@ export class OneBotClient {
     return headers;
   }
 
-  async send(target: SendTarget, text: string): Promise<void> {
-    const { endpoint, body } = buildSendBody(target, toPlainText(text));
+  private async post(endpoint: string, body: Record<string, unknown>): Promise<void> {
     const response = await fetch(`${this.options.httpUrl.replace(/\/$/, "")}/${endpoint}`, {
       method: "POST",
       headers: this.headers(),
@@ -184,6 +183,37 @@ export class OneBotClient {
     if (!response.ok) throw new Error(`onebot ${endpoint} ${response.status}`);
     const payload: any = await response.json().catch(() => null);
     if (payload && payload.status === "failed") throw new Error(`onebot ${endpoint}: ${payload.wording ?? payload.retcode}`);
+  }
+
+  async send(target: SendTarget, text: string): Promise<void> {
+    const { endpoint, body } = buildSendBody(target, toPlainText(text));
+    await this.post(endpoint, body);
+  }
+
+  /**
+   * Send an image as a base64 segment.
+   *
+   * Base64 rather than a file path on purpose: the protocol implementation runs in a different
+   * container, so a path from our workspace does not exist on its side. Base64 travels with the
+   * message and needs no shared mount.
+   */
+  async sendImage(target: SendTarget, base64: string, caption?: string): Promise<void> {
+    const message: Array<Record<string, unknown>> = [{ type: "image", data: { file: `base64://${base64}` } }];
+    if (caption?.trim()) message.push({ type: "text", data: { text: toPlainText(caption) } });
+    const endpoint = target.kind === "group" ? "send_group_msg" : "send_private_msg";
+    const body = target.kind === "group"
+      ? { group_id: Number(target.id), message }
+      : { user_id: Number(target.id), message };
+    await this.post(endpoint, body);
+  }
+
+  /** Upload a non-image file. Support varies by implementation; callers should handle failure. */
+  async sendFile(target: SendTarget, base64: string, name: string): Promise<void> {
+    const endpoint = target.kind === "group" ? "upload_group_file" : "upload_private_file";
+    const body = target.kind === "group"
+      ? { group_id: Number(target.id), file: `base64://${base64}`, name }
+      : { user_id: Number(target.id), file: `base64://${base64}`, name };
+    await this.post(endpoint, body);
   }
 
   /** Connect, dispatch messages, reconnect with backoff. Resolves only on an AbortSignal. */

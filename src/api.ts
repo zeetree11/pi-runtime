@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { statSync } from "node:fs";
+import path from "node:path";
 import { buildFanoutDigest, NoteStore, retryPrompt, shouldRetry, type Note } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
 import { ProposalStore, describeMcpEntry } from "./proposal.ts";
@@ -30,6 +32,8 @@ export type FanoutDeps = {
   defaultThread?: string;
   /** Deliver a proactive message to the user. Set by the channel adapter per incoming message. */
   sendText?: (text: string) => Promise<void>;
+  /** Deliver a file from the workspace (image or document). */
+  sendFile?: (path: string, caption?: string) => Promise<void>;
   /** Advisory path locks shared by fan-out children. */
   locks?: FileLockStore;
   /** Controlled self-modification: persona files and MCP server entries. */
@@ -40,7 +44,7 @@ export type FanoutDeps = {
 export type ControlServer = {
   port: number;
   /** Bind the sender + reset the quota for the task that is starting. */
-  setSession: (thread: string, sendText: (text: string) => Promise<void>) => void;
+  setSession: (thread: string, sendText: (text: string) => Promise<void>, sendFile?: (path: string, caption?: string) => Promise<void>) => void;
   close: () => Promise<void>;
 };
 
@@ -82,6 +86,10 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
   let sendCount = 0;
   let sendWindowThread = "";
   let sender: ((text: string) => Promise<void>) | null = null;
+  let fileSender: ((path: string, caption?: string) => Promise<void>) | null = null;
+  const IMAGE_EXT = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
+  const FILE_EXT = [".pdf", ".txt", ".md", ".csv", ".json", ".zip", ".log", ".html"];
+  const MAX_MEDIA_BYTES = Number(process.env.PI_RT_SEND_MAX_BYTES ?? 4 * 1024 * 1024);
 
   const server = createServer((request, response) => {
     const url = request.url ?? "/";
@@ -122,9 +130,54 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
 
         if (request.method === "POST" && url === "/send") {
           const body = await readJson(request);
+          const rawPath = String(body.path ?? "").trim();
+
+          // A file send: the agent names a path, the runtime decides whether that path may leave
+          // the container. Everything is confined to the workspace and to a size/type allowlist,
+          // because a "send this file" tool with no rules is a data-exfiltration tool.
+          if (rawPath) {
+            if (!fileSender) {
+              json(response, 409, { error: "当前通道不支持发送文件" });
+              return;
+            }
+            if (sendCount >= MAX_SENDS) {
+              json(response, 429, { error: `本次任务最多主动发送 ${MAX_SENDS} 条，已用完` });
+              return;
+            }
+            // Compare by relative path, not by string prefix: on Windows the resolved path is
+            // `C:\workspace\...`, so a prefix check against "/workspace/" rejects everything.
+            const workspaceRoot = process.env.PI_RT_WORKSPACE ?? "/workspace";
+            const resolved = path.resolve(workspaceRoot, rawPath);
+            const relative = path.relative(workspaceRoot, resolved);
+            if (relative.startsWith("..") || path.isAbsolute(relative)) {
+              json(response, 403, { error: `只能发送 ${workspaceRoot} 里的文件` });
+              return;
+            }
+            const ext = path.extname(resolved).toLowerCase();
+            if (![...IMAGE_EXT, ...FILE_EXT].includes(ext)) {
+              json(response, 400, { error: `不支持的文件类型 ${ext || "(无扩展名)"}` });
+              return;
+            }
+            let size = 0;
+            try {
+              size = statSync(resolved).size;
+            } catch {
+              json(response, 404, { error: `文件不存在：${rawPath}` });
+              return;
+            }
+            if (size > MAX_MEDIA_BYTES) {
+              json(response, 413, { error: `文件过大（${size} 字节，上限 ${MAX_MEDIA_BYTES}）` });
+              return;
+            }
+            await fileSender(resolved, body.caption ? String(body.caption) : undefined);
+            sendCount += 1;
+            json(response, 200, { ok: true, kind: "file", bytes: size, remaining: MAX_SENDS - sendCount });
+            return;
+          }
+
           const text = String(body.text ?? "").trim();
           if (!text) {
-            json(response, 400, { error: "text 必填" });
+            json(response, 400, { error: "text 或 path 必填" });
             return;
           }
           if (text.length > MAX_SEND_CHARS) {
@@ -335,10 +388,11 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
       const actual = (server.address() as { port: number }).port;
       resolve({
         port: actual,
-        setSession: (thread, sendText) => {
+        setSession: (thread, sendText, sendFile) => {
           sendWindowThread = thread;
           sendCount = 0;
           sender = sendText;
+          fileSender = sendFile ?? null;
         },
         close: () => new Promise<void>((done) => server.close(() => done())),
       });

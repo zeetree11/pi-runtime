@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { NoteStore, arbitrate, buildFanoutDigest, retryPrompt, shouldRetry } from "../src/fanout.ts";
@@ -198,6 +198,50 @@ const note = (key, value, by, minutes = 0) => ({
       body: JSON.stringify({ text: "新任务第一条" }),
     }).then((r) => r.json());
     check("new session resets quota", afterReset.ok === true && afterReset.remaining === 2, JSON.stringify(afterReset));
+  }
+
+  // 7) sending a file: workspace-confined, type and size checked
+  {
+    const sentFiles = [];
+    server.setSession("feishu:oc_9", async () => {}, async (filePath, caption) => {
+      sentFiles.push({ filePath, caption });
+    });
+
+    const outside = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/etc/passwd" }),
+    });
+    check("outside workspace refused", outside.status === 403, String(outside.status));
+
+    const missing = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/workspace/definitely-missing.png" }),
+    });
+    check("missing file reports 404", missing.status === 404, String(missing.status));
+
+    mkdirSync("/workspace", { recursive: true });
+    const png = path.join("/workspace", "unit-test-media.png");
+    const bad = path.join("/workspace", "unit-test-media.exe");
+    writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(bad, Buffer.from([0x4d, 0x5a]));
+
+    const badType = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: bad }),
+    });
+    check("disallowed extension refused", badType.status === 400, String(badType.status));
+
+    const ok = await fetch(`http://127.0.0.1:${server.port}/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: png, caption: "图在这" }),
+    }).then((r) => r.json());
+    check("image send accepted", ok.ok === true && ok.kind === "file", JSON.stringify(ok));
+    check("sender got resolved path", path.basename(sentFiles[0]?.filePath ?? "") === "unit-test-media.png", JSON.stringify(sentFiles));
+    check("caption passed through", sentFiles[0]?.caption === "图在这", JSON.stringify(sentFiles));
   }
 
   await server.close();

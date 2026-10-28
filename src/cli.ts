@@ -974,7 +974,11 @@ async function cmdServe(args: string[]): Promise<number> {
   dim(`fan-out API listening on 127.0.0.1:${control.port}`);
 
   // One handler for every transport: identity → event → run → reply → maybe distil.
-  const handler = async (message: Incoming, send: (chatId: string, text: string) => Promise<void>) => {
+  const handler = async (
+    message: Incoming,
+    send: (chatId: string, text: string) => Promise<void>,
+    media?: (chatId: string, path: string, caption?: string) => Promise<void>,
+  ) => {
     // Self-modification proposals are decided before anything else: "同意" here means "change
     // your own capability surface", which must not be confused with a tool approval.
     const pendingProposal = proposals.pendingFor(`${message.channel}:${message.chatId}`);
@@ -1027,7 +1031,11 @@ async function cmdServe(args: string[]): Promise<number> {
     const result = ingest(deps, message);
     // Bind the proactive sender before the task runs: a `send` tool call must reach the
     // conversation that is being answered, and the per-task quota restarts here.
-    control.setSession(result.thread, (text) => send(message.chatId, text));
+    control.setSession(
+      result.thread,
+      (text) => send(message.chatId, text),
+      media ? (filePath, caption) => media(message.chatId, filePath, caption) : undefined,
+    );
     if (result.duplicate) {
       dim(`duplicate message ${message.messageId} ignored`);
       return;
@@ -1192,6 +1200,19 @@ async function cmdServe(args: string[]): Promise<number> {
             const brevity = enforceBrevity(text, incoming.chatType === "group" ? "group" : "dm", incoming.text);
             if (brevity.trimmed) dim(`[简短化 ${text.length} → ${brevity.text.length} 字：${brevity.reason ?? ""}]`);
             await client.send(sendTargetFromChatId(message.chatId), brevity.text);
+          },
+          async (chatId, filePath, caption) => {
+            const buffer = readFileSync(filePath);
+            const base64 = buffer.toString("base64");
+            const target = sendTargetFromChatId(chatId);
+            const ext = path.extname(filePath).toLowerCase();
+            const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext);
+            if (isImage) {
+              await client.sendImage(target, base64, caption);
+              return;
+            }
+            await client.sendFile(target, base64, path.basename(filePath));
+            if (caption?.trim()) await client.send(target, caption);
           }),
         controller.signal,
       );
@@ -1269,7 +1290,19 @@ async function cmdServe(args: string[]): Promise<number> {
     controller.signal.addEventListener("abort", () => clearInterval(stopFeishuReminders));
     reminderStore.pending().length > 0 &&
       console.log(`待触发提醒 ${reminderStore.pending().length} 条`);
-    await sender!.serve((message) => handler(message, (chatId, text) => sender!.send(chatId, text)));
+    await sender!.serve((message) =>
+      handler(
+        message,
+        (chatId, text) => sender!.send(chatId, text),
+        async (_chatId, filePath, caption) => {
+          const buffer = readFileSync(filePath);
+          const ext = path.extname(filePath).toLowerCase();
+          const isImage = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext);
+          if (isImage) await sender!.sendImage(message.chatId, buffer, caption);
+          else await sender!.sendFile(message.chatId, buffer, path.basename(filePath), caption);
+        },
+      ),
+    );
     await new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve()));
     sender!.close();
     return 0;

@@ -44,6 +44,38 @@ export class FeishuChannel {
   }
 
   /**
+   * Send an image. Feishu requires an upload first: the message references an `image_key`, it does
+   * not carry bytes. Uploading on every send is wasteful but keeps no cache invalidation logic —
+   * correct beats clever for a handful of images a day.
+   */
+  async sendImage(chatId: string, buffer: Buffer, caption?: string): Promise<void> {
+    const uploaded: any = await this.client.im.v1.image.create({
+      data: { image_type: "message", image: buffer as any },
+    });
+    const imageKey = uploaded?.image_key ?? uploaded?.data?.image_key;
+    if (!imageKey) throw new Error("飞书图片上传没有返回 image_key");
+    await this.client.im.v1.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: { receive_id: chatId, msg_type: "image", content: JSON.stringify({ image_key: imageKey }) },
+    });
+    if (caption?.trim()) await this.send(chatId, caption);
+  }
+
+  /** Send a non-image file as a Feishu file message. */
+  async sendFile(chatId: string, buffer: Buffer, fileName: string, caption?: string): Promise<void> {
+    const uploaded: any = await this.client.im.v1.file.create({
+      data: { file_type: "stream", file_name: fileName, file: buffer as any },
+    });
+    const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+    if (!fileKey) throw new Error("飞书文件上传没有返回 file_key");
+    await this.client.im.v1.message.create({
+      params: { receive_id_type: "chat_id" },
+      data: { receive_id: chatId, msg_type: "file", content: JSON.stringify({ file_key: fileKey }) },
+    });
+    if (caption?.trim()) await this.send(chatId, caption);
+  }
+
+  /**
    * Feishu events carry an open_id, not a display name. Resolving the name needs the
    * contact scope; when the app lacks it we fall back to the id rather than failing the
    * message — a mislabelled speaker is recoverable, a dropped message is not.
