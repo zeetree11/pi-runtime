@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { DB_PATH, DATA_DIR, PI_CLI, ensureDirs, loadConfig, piArgs, piEnv } from "./config.ts";
 import { Store } from "./db.ts";
@@ -1202,6 +1202,7 @@ async function cmdServe(args: string[]): Promise<number> {
             await client.send(sendTargetFromChatId(message.chatId), brevity.text);
           },
           async (chatId, filePath, caption) => {
+            dim(`发送文件 ${filePath}（${(statSync(filePath).size / 1024).toFixed(1)}KB）`);
             const buffer = readFileSync(filePath);
             const base64 = buffer.toString("base64");
             const target = sendTargetFromChatId(chatId);

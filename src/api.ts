@@ -88,7 +88,9 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
   let sender: ((text: string) => Promise<void>) | null = null;
   let fileSender: ((path: string, caption?: string) => Promise<void>) | null = null;
   const IMAGE_EXT = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
-  const FILE_EXT = [".pdf", ".txt", ".md", ".csv", ".json", ".zip", ".log", ".html"];
+  // `.svg` is intentionally a *file*, not an image: chats do not render it, and pretending it is
+  // an image hides that. It still needs to be sendable — diagrams and plots are often SVG.
+  const FILE_EXT = [".pdf", ".txt", ".md", ".csv", ".json", ".zip", ".log", ".html", ".svg", ".yaml", ".yml"];
   const MAX_MEDIA_BYTES = Number(process.env.PI_RT_SEND_MAX_BYTES ?? 4 * 1024 * 1024);
 
   const server = createServer((request, response) => {
