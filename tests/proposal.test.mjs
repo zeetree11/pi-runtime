@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { MCP_CONFIG, ProposalStore, validateMcpServer, validateProposal } from "../src/proposal.ts";
+import { MCP_CONFIG, ProposalStore, describeMcpEntry, validateMcpServer, validateProposal } from "../src/proposal.ts";
 
 let pass = 0;
 let fail = 0;
@@ -169,6 +169,27 @@ writeFileSync(path.join(dir, "persona", "CONTRACTS.md"), "# 纪律\n\n旧的纪�
   } else {
     check("replace proposal created", false, proposed.reason);
   }
+}
+
+// 10) npx is allowed by default, switchable off, and described honestly
+{
+  const allowed = validateMcpServer({ name: "weather", command: "npx", args: ["-y", "weather-mcp"] }, {});
+  check("npx allowed by default", allowed.ok === true, JSON.stringify(allowed));
+
+  process.env.PI_RT_ALLOW_MCP_FETCH = "0";
+  const blocked = validateMcpServer({ name: "weather", command: "npx", args: ["-y", "weather-mcp"] }, {});
+  check("npx blocked when switch is off", blocked.ok === false, JSON.stringify(blocked));
+  check("blocked reason names the switch", blocked.ok === false && blocked.reason.includes("PI_RT_ALLOW_MCP_FETCH"), blocked.ok === false ? blocked.reason : "");
+  check("node still allowed when switch is off", validateMcpServer({ name: "local", command: "node", args: ["/workspace/a.mjs"] }, {}).ok === true);
+  delete process.env.PI_RT_ALLOW_MCP_FETCH;
+
+  const npxEntry = describeMcpEntry(JSON.stringify({ command: "npx", args: ["-y", "weather-mcp"] }));
+  check("describe shows the command line", npxEntry.commandLine === "npx -y weather-mcp", npxEntry.commandLine);
+  check("describe flags downloads", npxEntry.downloads === true);
+
+  const nodeEntry = describeMcpEntry(JSON.stringify({ command: "node", args: ["/workspace/mcp/x.mjs"] }));
+  check("local command not flagged as download", nodeEntry.downloads === false);
+  check("malformed entry is handled", describeMcpEntry("not json").commandLine === "(无法解析)");
 }
 
 try { rmSync(dir, { recursive: true, force: true }); } catch { /* Windows handle */ }

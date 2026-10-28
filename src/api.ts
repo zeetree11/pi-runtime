@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { buildFanoutDigest, NoteStore, retryPrompt, shouldRetry, type Note } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
-import { ProposalStore } from "./proposal.ts";
+import { ProposalStore, describeMcpEntry } from "./proposal.ts";
 import { buildSplitPrompt, parseSubtasks, runWithLimit, type ChildSpec } from "./subagent.ts";
 
 /**
@@ -194,14 +194,22 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           }
 
           const proposal = requested.proposal;
-          const what = proposal.path.startsWith("mcp:")
-            ? `给自装上 MCP server「${proposal.path.slice(4)}」`
-            : `修改 ${proposal.path}`;
-          const message = [
-            `我想${what}。`,
-            `理由：${proposal.rationale}`,
-            `回复「同意」我就改，回复「拒绝」保持原样（30 分钟内有效）。`,
-          ].join("\n");
+          const isMcp = proposal.path.startsWith("mcp:");
+          const what = isMcp ? `给自装上 MCP server「${proposal.path.slice(4)}」` : `修改 ${proposal.path}`;
+          const messageParts = [`我想${what}。`, `理由：${proposal.rationale}`];
+
+          // For an MCP server the approval decision is really "may this command run on every turn
+          // from now on", so the command line is part of the message, not a detail behind it.
+          if (isMcp) {
+            const described = describeMcpEntry(proposal.after);
+            messageParts.push(`要运行的命令：\`${described.commandLine}\``);
+            if (described.downloads) {
+              messageParts.push("⚠️ 这会从网络下载第三方代码并在容器里运行，能读到 /data 下的记忆库。");
+            }
+          }
+
+          messageParts.push("回复「同意」我就改，回复「拒绝」保持原样（30 分钟内有效）。");
+          const message = messageParts.join("\n");
           if (sender) await sender(message);
           json(response, 200, { ok: true, id: proposal.id, status: proposal.status, preview: message });
           return;

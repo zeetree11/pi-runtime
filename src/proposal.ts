@@ -73,6 +73,8 @@ export function validateProposal(input: { path: string; content: string }): Vali
 export const MCP_PREFIX = "mcp:";
 export const MCP_CONFIG = ".pi/agent/mcp.json";
 const ALLOWED_COMMANDS = ["node", "npx", "uvx", "python3", "deno", "bun"];
+/** Commands that resolve and download code at run time, rather than running something local. */
+const FETCH_COMMANDS = ["npx", "uvx"];
 const MAX_SERVERS = 8;
 
 /** Shape + safety checks for a proposed MCP server. Exported for tests. */
@@ -88,6 +90,11 @@ export function validateMcpServer(
   const command = String(server.command ?? "").trim();
   if (!ALLOWED_COMMANDS.includes(command)) {
     return { ok: false, reason: `命令 ${command || "(空)"} 不在允许列表内（${ALLOWED_COMMANDS.join(", ")}）` };
+  }
+  // npx / uvx pull a package from npm / PyPI at start-up. Allowed by default (the operator asked
+  // for it), but a deployment can switch it off without a code change.
+  if (FETCH_COMMANDS.includes(command) && process.env.PI_RT_ALLOW_MCP_FETCH === "0") {
+    return { ok: false, reason: `${command} 会从网络下载第三方包，本部署已通过 PI_RT_ALLOW_MCP_FETCH=0 关闭` };
   }
 
   const args = server.args ?? [];
@@ -120,6 +127,26 @@ export function validateMcpServer(
 
   return { ok: true, path: `${MCP_PREFIX}${name}`, chars: 0, limit: 0 };
 }
+/**
+ * One-line description of what an MCP proposal will actually run.
+ *
+ * The approval message must show the real command line: "install the weather server" is not
+ * enough information to decide whether to let a third-party package run inside the container.
+ */
+export function describeMcpEntry(after: string): { commandLine: string; downloads: boolean } {
+  try {
+    const entry = JSON.parse(after) as { command?: string; args?: string[] };
+    const command = String(entry.command ?? "");
+    const args = Array.isArray(entry.args) ? entry.args : [];
+    return {
+      commandLine: [command, ...args].filter(Boolean).join(" "),
+      downloads: FETCH_COMMANDS.includes(command),
+    };
+  } catch {
+    return { commandLine: "(无法解析)", downloads: false };
+  }
+}
+
 export class ProposalStore {
   private readonly db: DatabaseSync;
   private readonly dataDir: string;
