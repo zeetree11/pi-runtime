@@ -22,6 +22,7 @@ import { NoteStore } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
 import { KnowledgeStore, formatHits } from "./knowledge.ts";
 import { ProposalStore } from "./proposal.ts";
+import { FeedbackStore, appendCases, isComplaint } from "./feedback.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -951,6 +952,7 @@ async function cmdServe(args: string[]): Promise<number> {
   // only has to provide a way to deliver one message.
   const reminderStore = new ReminderStore(DATA_DIR);
   const proposals = new ProposalStore(DATA_DIR);
+  const feedback = new FeedbackStore(DATA_DIR);
 
   // Fan-out control API. The agent reaches it through the `fanout` MCP tool; the runtime stays the
   // only owner of the task queue. Children run on their own threads (`#subN`) so their context and
@@ -1030,6 +1032,12 @@ async function cmdServe(args: string[]): Promise<number> {
       return;
     }
     dim(`event #${result.eventId} ${result.speaker} @ ${result.thread}`);
+    // A complaint is the cheapest possible failure signal, and it arrives exactly when the failure
+    // does. Capture the pair it refers to as a draft; nothing becomes a test without review.
+    if (isComplaint(message.text)) {
+      const captured = feedback.captureFromThread(result.thread, message.text);
+      if (captured) dim(`badcase #${captured.id} 已记录（草稿，待审）`);
+    }
     busy.add(result.thread);
     try {
       const taskId = store.createTask(message.text, cfg.workspace, result.thread);
@@ -1498,6 +1506,45 @@ async function main(): Promise<number> {
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
       }
       return 0;
+    }
+    case "feedback": {
+      const store = new FeedbackStore(DATA_DIR);
+      const sub = rest[0] ?? "list";
+      if (sub === "list") {
+        const drafts = store.drafts();
+        if (drafts.length === 0) {
+          console.log("没有待审的 badcase 草稿");
+          return 0;
+        }
+        for (const row of drafts) {
+          console.log(`#${row.id}  ${row.correction.slice(0, 40)}`);
+          console.log(`   问：${row.userText.slice(0, 60)}`);
+          console.log(`   答（错）：${row.agentReply.slice(0, 60)}`);
+        }
+        return 0;
+      }
+      if (sub === "accept") {
+        const id = Number(rest[1]);
+        const row = Number.isInteger(id) ? store.byId(id) : null;
+        if (!row) {
+          console.log("用法：feedback accept <id>");
+          return 1;
+        }
+        const evalCase = store.toEvalCase(row);
+        const added = appendCases(path.join(ROOT, "eval", "holdout-real.json"), [evalCase]);
+        store.accept(id);
+        console.log(added > 0 ? `#${id} 已转成用例 ${evalCase.id}` : `#${id} 已在评测集中`);
+        console.log("注意：expect 为空，需要人工补一条断言才算真正的回归用例");
+        return 0;
+      }
+      if (sub === "drop") {
+        const id = Number(rest[1]);
+        const row = Number.isInteger(id) ? store.drop(id) : null;
+        console.log(row ? `#${id} 已丢弃` : `#${id} 不存在或不是草稿`);
+        return row ? 0 : 1;
+      }
+      console.log("用法：feedback list | accept <id> | drop <id>");
+      return 1;
     }
     case "proposals": {
       const store = new ProposalStore(DATA_DIR);
