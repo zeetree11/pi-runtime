@@ -38,8 +38,13 @@ export function buildSplitPrompt(userPrompt: string, count: number): string {
 /** Recover the task list from a model reply that may be wrapped in prose or fences. */
 export function parseSubtasks(text: string, count: number): ChildSpec[] {
   const cleaned = text.replace(/```(?:json)?/gi, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
+  // Accept both `{"tasks":[...]}` and a bare `[...]`: the prompt asks for the object form, but
+  // models return the array often enough that rejecting it turns a usable split into a failure.
+  const firstObject = cleaned.indexOf("{");
+  const firstArray = cleaned.indexOf("[");
+  const asArray = firstArray !== -1 && (firstObject === -1 || firstArray < firstObject);
+  const start = asArray ? firstArray : firstObject;
+  const end = asArray ? cleaned.lastIndexOf("]") : cleaned.lastIndexOf("}");
   if (start === -1 || end <= start) return [];
 
   let parsed: any;

@@ -18,6 +18,8 @@ import { ReminderStore, extractReminderDirectives, parseWhen } from "./reminders
 import { enforceBrevity } from "./brevity.ts";
 import { embedText } from "../mcp/lib/embed.mjs";
 import { ApprovalStore, extractAskDirectives, parseDecision } from "./approval.ts";
+import { NoteStore } from "./fanout.ts";
+import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
 import { NOISE_TYPES } from "./event-log.ts";
@@ -942,6 +944,22 @@ async function cmdServe(args: string[]): Promise<number> {
     .filter(Boolean);
   // Approvals are parked per thread: the agent asks, the user answers, the task resumes.
   const approvals = new ApprovalStore(DATA_DIR);
+
+  // Fan-out control API. The agent reaches it through the `fanout` MCP tool; the runtime stays the
+  // only owner of the task queue. Children run on their own threads (`#subN`) so their context and
+  // memory do not leak into the parent — the same isolation the CLI --spawn path uses.
+  const fanoutGate = new Gate(3, 0);
+  const control = await startControlServer({
+    notes: new NoteStore(DATA_DIR),
+    defaultThread: "fanout",
+    log: (message) => dim(message),
+    runChild: async ({ prompt, thread, index }) => {
+      const childThread = `${thread}#sub${index}`;
+      const childTask = store.createTask(prompt, cfg.workspace, childThread);
+      return runTask(store, cfg, store.getTask(childTask)!, { onStatus: dim }, memory, fanoutGate);
+    },
+  });
+  dim(`fan-out API listening on 127.0.0.1:${control.port}`);
 
   // One handler for every transport: identity → event → run → reply → maybe distil.
   const handler = async (message: Incoming, send: (chatId: string, text: string) => Promise<void>) => {
