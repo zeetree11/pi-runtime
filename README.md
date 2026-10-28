@@ -64,6 +64,25 @@ node src/cli.ts ask "总结一下这个仓库是做什么的" --cwd .
 node src/cli.ts worker
 ```
 
+## 能力全景
+
+一个运行中的实例（飞书 + QQ 双通道，共用一份记忆）当前具备：
+
+| 层 | 能力 | 关键实现 |
+|---|---|---|
+| 接入 | 飞书长连接 / QQ OneBot / CLI / Telegram | 幂等 `claimMessage`，群内 @ 或唤醒词才应答 |
+| 记忆 | 证据绑定的结构化事实、四态裁决、置信度门限 | `memory.ts` + `confidence.ts`；`tentative` 永不注入 |
+| 记忆检索 | 向量检索（`memory_search`），同模型空间比较 | `memory-server.mjs`，带逐字证据 |
+| 文档知识 | 切分 → 向量 → `knowledge_search` / `knowledge_add` | `knowledge.ts`，与记忆严格分离 |
+| 上下文 | 分段预算、稳定性、淘汰顺序、跨段去重、冲突提示、token 校准 | `compose.ts` |
+| 人格 | `SOUL.md`（怎么说）+ `CONTRACTS.md`（怎么干），独立字符预算 | `persona.ts` |
+| 工具 | `fetch` / `search` / `memory_search` / `knowledge_*` / `fanout` / `note_*` / `lock_*` / `send` / `propose_self_edit` | 六个手写 MCP server |
+| 多智能体 | 模型自主 `fanout`，子任务独立线程、共享便签、冲突仲裁、失败重试 | `fanout.ts` + `api.ts` |
+| 治理 | 死循环状态指纹、HITL 审批、并发文件锁、凭据守卫、SSRF 防护 | `loop-guard.ts` / `approval.ts` / `file-lock.ts` |
+| 自我修改 | 改人格与 MCP 配置需人工批准，可回滚，代码永不可改 | `proposal.ts` |
+| 可观测 | span 树、工具审计、事件日志、`doctor`、`context_plan` | `trace.ts` / `tools-report.ts` |
+
+**当前规模**：38 个源文件 · 38 个测试文件 · 737 项测试 · 4 个长连服务。
 ## 常用命令
 
 | 命令 | 作用 |
@@ -590,6 +609,46 @@ pi 自带 MCP 客户端（`pi mcp add`，配置在 `data/pi/mcp.json`）。我�
 | `full` | 全部 | 允许 |
 
 `readonly` 排除 `mcp__*` 是刻意的：MCP server 自己声明能力，我们无法检查它会不会写。一个"只读"模式如果留着 MCP 开口，就不是只读 —— 任何人 `pi mcp add` 一个 filesystem server 就能把写权限重新打开。
+## MCP 工具集
+
+四个手写 server（无 SDK 依赖），全部以 `direct` 暴露给模型：
+
+| server | 工具 | 说明 |
+|---|---|---|
+| `fetch-server` | `fetch` `search` | HttpOnly + SSRF 防御；搜索优先 Bing（DDG 在境内不可达） |
+| `memory-server` | `memory_search` | 只读打开数据库，只返回 `active`，强制同 embedding 空间 |
+| `knowledge-server` | `knowledge_search` `knowledge_list` `knowledge_add` | 文档切分 600 字符 / 80 重叠，同名覆盖 |
+| `spawn-server` | `fanout` `note_write` `note_read` `lock_file` `unlock_file` `list_locks` `send` `propose_self_edit` | 派生、共享便签、路径锁、主动播报、自改申请 |
+
+运行时还暴露一个本地控制 API（`127.0.0.1:8899`）：`/fanout` `/notes` `/lock` `/send` `/proposal` `/health`。
+**调度权只在运行时一处**——MCP server 是薄客户端，否则会出现两个进程抢同一个队列。
+
+## 自我修改：改能力面，不改代码
+
+`propose_self_edit` 允许模型申请两类改动，**都必须人工批准**：
+
+```
+persona/SOUL.md · persona/CONTRACTS.md      → 改语气与纪律
+mcp:<name>                                  → 新增/替换一个 MCP server
+src/**                                      → 永远拒绝
+```
+
+MCP 那条额外加五道限制：命令白名单（node/npx/uvx/python3/deno/bun）、参数路径必须在 `/workspace`、
+env 值疑似凭据即拒、最多 8 个 server、必须写理由。应用后写 `mcp.json`，可 `proposal-revert` 精确回滚。
+
+**为什么不做“模型审模型”**：只有一条模型链路时，让同一个模型审自己的补丁等于没审。这里人就是审查者，
+校验器只兜机械性错误。
+
+## 知识库与记忆为什么分开
+
+| | 记忆 | 知识库 |
+|---|---|---|
+| 回答 | 关于这个人的结论 | 这份文档说了什么 |
+| 形态 | 结构化行 + 证据外键 | 切分后的文本 + 向量 |
+| 写入 | 蒸馏自动（有人工审批的置信度门限） | `knowledge add` 或 `knowledge_add` |
+| 检索 | 结构过滤（默认注入） | 余弦 top-k（按需调用） |
+
+**分开的意义**：文档内容不能伪装成“用户说过的话”，长 PDF 也挤不掉记忆预算。
 ## 事件日志：什么值得留
 
 每一条 RPC record 过去都原样入库，其中大部分是流式增量：pi 每个 token 发一条 `message_update`，用 start/end 包住每一轮 —— 活着时有用，事后无用，因为最终答案已经作为对话事件存在了。
@@ -784,18 +843,27 @@ pi-rt eval --cases eval/holdout-v3.json --repeat 3
 - 提醒：控制指令登记 → 落库 → 30 秒轮询 → 主动推送（东八区解析、相对时间、去重）
 - 群聊治理：真 @ 才算叫它、指定群免 @、关键词唤醒；跳过时打印原始 at 段用于诊断
 - 服务化：`serve` 后台维护循环（闲置提炼 + 过期清理 + 每日备份）
-- 部署：一台 Debian 13 云服务器，飞书长连接 + QQ 通道（容器内 QQ + 协议端 + noVNC）
-- 工程：CI 跑 472 项测试、MIT LICENSE、无桌面 QQ 部署的可复现文档
+- 部署：一台 Debian 13 云服务器，飞书长连接 + QQ 通道（snowluma 容器内的 QQ + 协议端）
+- 工程：CI 跑 737 项测试 + 密钥扫描 + 脚本语法检查、MIT LICENSE、无桌面 QQ 部署的可复现文档
+- 置信度：`confidence.ts` 接进 `apply()`，`tentative` 永不注入，手写记忆跳过评分
+- 死循环：状态指纹（工具 + 参数稳定哈希），连续 3 次告警 / 6 次中止
+- HITL：`<!--ask:-->` 挂起 → 同意/拒绝/超时 → 重跑原请求
+- 多智能体：模型自主 `fanout`、子任务独立线程、共享便签、冲突仲裁（最后写入 + 显式上报）、失败重试一次
+- 主动播报：`send` 工具，每任务 3 条上限，只能发当前会话
+- 并发文件锁：路径级租约 + TTL 自愈 + 跑前跑后哈希对比（不依赖配合的冲突发现）
+- 文档知识库：切分 / 向量 / `knowledge_search`，与记忆严格分离
+- 自我修改：人格与 MCP 配置可申请修改，人工批准 + 精确回滚，`src/**` 永不可改
+- 提醒：飞书与 QQ 双通道都已有投递循环
 
 **已知缺口：**
 
-- `src/confidence.ts` 的置信度评分**写好了但没接进 `apply()`** —— 现在所有写入仍是 active，`tentative` 状态从未产生
-- 单条用例在不同运行间抖动（30 题里约 4 条），尚未定位
-- 事件层未脱敏：含密码的原始消息仍明文存在 `conversation_events`
 - 富媒体（图片 / 文件 / 语音）直接丢弃
+- 流式输出：pi 有 `text_delta`，但没有推送到 IM 的出口（飞书支持消息更新，QQ 不支持）
+- 检索质量：默认 hash embedding 只抓字面相似，未接真实 embedding；无 rerank、无 query 改写
+- 事件层未脱敏：含密码的原始消息仍明文存在 `conversation_events`
+- 单条评测用例在不同运行间抖动（30 题里约 4 条），尚未定位
 - 单实例：SQLite + 一条长连接，不能水平扩容
 - 真隔离未做：需要容器/虚机，且 `read` 工具仍能读用户可读的一切
-- 提醒目前只接了 QQ 通道，飞书的发送路径还没接
 - 持续工作（Work 生命周期）没有实现：跨轮目标靠记忆和摘要顶着，而不是显式状态机
 
 下一步见 [ROADMAP.md](ROADMAP.md)。
