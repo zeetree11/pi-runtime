@@ -54,7 +54,7 @@ def start_task_container(name, image):
 
 def run_in_container(name, script_path, timeout=300):
     script = Path(script_path).read_text(encoding="utf-8-sig").lstrip("\ufeff")
-    return sh(["docker", "exec", "-i", name, "bash", "-s"], timeout=timeout, input_text=script)
+    return sh(["docker", "exec", "-i", name, "sh", "-s"], timeout=timeout, input_text=script)
 
 
 def write_mcp_config(home: Path, task_container: str):
@@ -79,6 +79,14 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
     home = workdir / "home"
     home.mkdir(parents=True, exist_ok=True)
     write_mcp_config(home, task_container)
+    # The provider key lives in the runtime's auth.json, not in the env file. Copy it (and the
+    # model settings) into the throwaway HOME so `pi` can authenticate — while keeping the task
+    # container free of any credential.
+    runtime_agent_dir = Path("/srv/pi-rt/data2/.pi/agent")
+    for name in ("auth.json", "settings.json", "models-store.json"):
+        source = runtime_agent_dir / name
+        if source.exists():
+            (home / ".pi" / "agent" / name).write_bytes(source.read_bytes())
 
     env_file = Path("/srv/pi-rt/env/pi-rt.env")
     key = ""
@@ -151,6 +159,7 @@ def run_task(task_dir: Path, timeout_min: int, keep: bool):
             "agent_exit": agent["code"],
             "tests_output": check["output"],
             "agent_tail": agent["stdout"][-1500:],
+            "agent_stderr": agent["stderr"][-1500:],
             "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
         (workdir / "result.json").write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")

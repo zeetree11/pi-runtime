@@ -88,7 +88,7 @@ function truncate(text) {
 /** Run a command inside the task container and return {stdout, stderr, code}. */
 function execInTask(command, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn("docker", ["exec", CONTAINER, "bash", "-lc", command], {
+    const child = spawn("docker", ["exec", CONTAINER, "sh", "-c", command], {
       timeout: options.timeoutMs ?? TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"],
     });
