@@ -1,4 +1,4 @@
-﻿{
+{
   "id": "fix-off-by-one",
   "image": "python:3.12-slim",
   "instruction": "工作目录 /app 里的 calc.py 有一个 bug：sum_first(n) 应该返回 1..n 的和，但在 n=100 时返回了 4950。修复它，使 sum_first(100) == 5050，并且 sum_first(1) == 1。不要改动函数名或参数。"

@@ -53,7 +53,7 @@ def start_task_container(name, image):
 
 
 def run_in_container(name, script_path, timeout=300):
-    script = Path(script_path).read_text(encoding="utf-8")
+    script = Path(script_path).read_text(encoding="utf-8-sig").lstrip("\ufeff")
     return sh(["docker", "exec", "-i", name, "bash", "-s"], timeout=timeout, input_text=script)
 
 
@@ -125,7 +125,7 @@ def verify(name, tests_path):
 
 
 def run_task(task_dir: Path, timeout_min: int, keep: bool):
-    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8-sig").lstrip("\ufeff"))
     task_id = meta["id"]
     container = f"tb-{task_id}"
     workdir = ROOT / "bench" / "terminal" / "results" / task_id

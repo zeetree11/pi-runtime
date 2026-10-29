@@ -1,4 +1,4 @@
-﻿{
+{
   "id": "write-config",
   "image": "alpine:3.20",
   "instruction": "在沙箱里创建文件 /etc/myapp.conf，内容必须恰好是三行：第一行 `host=127.0.0.1`，第二行 `port=8080`，第三行 `mode=prod`（不要有其它行，结尾可以有一个换行）。"
