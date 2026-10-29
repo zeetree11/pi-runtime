@@ -25,6 +25,7 @@ import { ProposalStore } from "./proposal.ts";
 import { FeedbackStore, appendCases, isComplaint } from "./feedback.ts";
 import { discoverSkills, formatSkills } from "./skills.ts";
 import { extractAttachments, softenMention } from "./attachments.ts";
+import { formatReport, runRecallBench } from "./bench.ts";
 import { startControlServer } from "./api.ts";
 import { DEFAULT_CONTRACTS_LIMIT, DEFAULT_SOUL_LIMIT, PERSONA_DIR, SOUL_FILE, contractsPath, contractsUsage, ensureStanding, personaUsage, readContracts, readSoul, soulPath, standingUsage, writeContracts, writeSoul } from "./persona.ts";
 import { CalibrationStore, charsPerTokenFrom, DEFAULT_CHARS_PER_TOKEN, MIN_SAMPLES } from "./calibration.ts";
@@ -1556,6 +1557,28 @@ async function main(): Promise<number> {
       for (const { row, score } of hits) {
         console.log(`${score.toFixed(3)}  ${row.content}`);
         if (row.evidenceQuote) console.log(`        证据 #${row.evidenceEventId}：「${row.evidenceQuote}」`);
+      }
+      return 0;
+    }
+    case "bench": {
+      const sub = rest[0] ?? "recall";
+      if (sub !== "recall") {
+        console.log("用法：bench recall [--json <文件>]");
+        return 1;
+      }
+      const file = flagValue(rest, "--json") ?? path.join(import.meta.dirname ?? process.cwd(), "..", "bench", "recall.json");
+      const fixture = JSON.parse(readFileSync(file, "utf8")) as {
+        memories: Array<{ key: string; category: "preference" | "fact" | "event"; content: string }>;
+        queries: Array<{ q: string; expect: string[] }>;
+      };
+      const report = await runRecallBench({ memories: fixture.memories, queries: fixture.queries });
+      console.log(formatReport(report));
+      // Regression gate: an embedding retriever that cannot beat literal matching is not worth
+      // its complexity, and that is exactly what the baseline is here to catch.
+      const beatsBaseline = report.recall.recallAtK >= report.baseline.recallAtK;
+      if (!beatsBaseline) {
+        console.log("⚠️ embedding 检索没有优于关键词基线，说明当前 embedding 只抓到了字面相似。");
+        return 1;
       }
       return 0;
     }
