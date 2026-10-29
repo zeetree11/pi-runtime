@@ -98,14 +98,17 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
     cmd = [
         "docker", "run", "--rm",
         "--name", f"{task_container}-agent",
-        "-v", f"{ROOT}:/app:ro",
-        "-v", f"{home}:/root",
+        # The runtime image already has node_modules installed; only the bridge file is mounted in.
+        # Reinstalling dependencies here would add a network dependency to every benchmark run.
+        "--user", "0:0",
+        "-v", f"{ROOT}/mcp/task-exec-server.mjs:/app/mcp/task-exec-server.mjs:ro",
+        "-v", f"{home}:/data",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", "/usr/bin/docker:/usr/bin/docker:ro",
-        "-e", "HOME=/root",
+        "-e", "HOME=/data",
         "-e", f"DEEPSEEK_API_KEY={key}",
         "-e", "PI_RT_TASK_CONTAINER=" + task_container,
-        "node:24",
+        "pi-runtime:latest",
         "node", "/app/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
         "-p", meta["instruction"],
         "--model", meta.get("model", "deepseek/deepseek-chat"),
