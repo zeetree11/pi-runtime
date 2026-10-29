@@ -84,11 +84,10 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
     # container free of any credential.
     # The runtime keeps provider credentials in its own pi home (<data>/pi), not under
     # .pi/agent — that directory only holds our MCP config.
-    runtime_agent_dir = Path("/srv/pi-rt/data2/pi")
-    for name in ("auth.json", "settings.json", "models-store.json"):
-        source = runtime_agent_dir / name
-        if source.exists():
-            (home / ".pi" / "agent" / name).write_bytes(source.read_bytes())
+    runtime_pi_home = Path("/srv/pi-rt/data2/pi")
+    bench_pi_home = home / "pi"
+    if runtime_pi_home.exists():
+        shutil.copytree(runtime_pi_home, bench_pi_home, dirs_exist_ok=True)
 
     env_file = Path("/srv/pi-rt/env/pi-rt.env")
     key = ""
@@ -105,17 +104,17 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
         "--user", "0:0",
         "-v", f"{ROOT}/mcp/task-exec-server.mjs:/app/mcp/task-exec-server.mjs:ro",
         "-v", f"{home}:/data",
-        "-v", "/srv/pi-rt/data2/pi:/runtime-pi:ro",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", "/usr/bin/docker:/usr/bin/docker:ro",
         "-e", "HOME=/data",
-        "-e", "PI_CODING_AGENT_DIR=/runtime-pi",
+        "-e", "PI_CODING_AGENT_DIR=/data/pi",
         "-e", f"DEEPSEEK_API_KEY={key}",
         "-e", "PI_RT_TASK_CONTAINER=" + task_container,
         "pi-runtime:latest",
         "node", "/app/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
         "-p", meta["instruction"],
-        "--model", meta.get("model", "deepseek/deepseek-flash"),
+        "--provider", meta.get("provider", os.environ.get("BENCH_PROVIDER", "deepseek")),
+        "--model", meta.get("model", os.environ.get("BENCH_MODEL", "deepseek-flash")),
         "--tools", "mcp__task__*",
         "--no-approve",
         "--no-session",
