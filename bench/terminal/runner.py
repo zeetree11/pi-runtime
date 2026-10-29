@@ -82,7 +82,9 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
     # The provider key lives in the runtime's auth.json, not in the env file. Copy it (and the
     # model settings) into the throwaway HOME so `pi` can authenticate — while keeping the task
     # container free of any credential.
-    # The runtime keeps the provider credentials in its own pi home (`<data>/pi`), not under\n    # `.pi/agent` — that directory only holds our MCP config.\n    runtime_agent_dir = Path("/srv/pi-rt/data2/pi")
+    # The runtime keeps provider credentials in its own pi home (<data>/pi), not under
+    # .pi/agent — that directory only holds our MCP config.
+    runtime_agent_dir = Path("/srv/pi-rt/data2/pi")
     for name in ("auth.json", "settings.json", "models-store.json"):
         source = runtime_agent_dir / name
         if source.exists():
