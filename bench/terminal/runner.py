@@ -115,7 +115,7 @@ def run_agent(meta, task_container, workdir: Path, timeout_min: int):
         "-p", meta["instruction"],
         "--provider", meta.get("provider", os.environ.get("BENCH_PROVIDER", "deepseek")),
         "--model", meta.get("model", os.environ.get("BENCH_MODEL", "deepseek-flash")),
-        "--tools", "mcp__task__*",
+        "--exclude-tools", "bash,read,write,edit,ls,grep,find",
         "--no-approve",
         "--no-session",
     ]
