@@ -71,7 +71,12 @@ def write_mcp_config(home: Path, task_container: str):
             }
         }
     }
-    (agent_dir / "mcp.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    text = json.dumps(config, ensure_ascii=False, indent=2)
+    (agent_dir / "mcp.json").write_text(text, encoding="utf-8")
+    # PI_CODING_AGENT_DIR points at <home>/pi, so that is where pi looks for mcp.json. Writing
+    # both keeps the harness working whichever path pi resolves.
+    (home / "pi" / "mcp.json").parent.mkdir(parents=True, exist_ok=True)
+    (home / "pi" / "mcp.json").write_text(text, encoding="utf-8")
 
 
 def run_agent(meta, task_container, workdir: Path, timeout_min: int):
