@@ -210,20 +210,24 @@ const note = (key, value, by, minutes = 0) => ({
     const outside = await fetch(`http://127.0.0.1:${server.port}/send`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: "/etc/passwd" }),
+      body: JSON.stringify({ path: "../outside.png" }),
     });
     check("outside workspace refused", outside.status === 403, String(outside.status));
 
     const missing = await fetch(`http://127.0.0.1:${server.port}/send`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: "/workspace/definitely-missing.png" }),
+      body: JSON.stringify({ path: "definitely-missing.png" }),
     });
     check("missing file reports 404", missing.status === 404, String(missing.status));
 
-    mkdirSync("/workspace", { recursive: true });
-    const png = path.join("/workspace", "unit-test-media.png");
-    const bad = path.join("/workspace", "unit-test-media.exe");
+    // Never write to the real /workspace: on CI the runner cannot create it, and a test that
+    // needs root is a test that passes locally and fails in CI for the wrong reason.
+    const mediaRoot = path.join(dir, "workspace");
+    mkdirSync(mediaRoot, { recursive: true });
+    process.env.PI_RT_WORKSPACE = mediaRoot;
+    const png = path.join(mediaRoot, "unit-test-media.png");
+    const bad = path.join(mediaRoot, "unit-test-media.exe");
     writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     writeFileSync(bad, Buffer.from([0x4d, 0x5a]));
 
