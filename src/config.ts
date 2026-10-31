@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_MODE, normalizeMode, scrubEnv, toolArgs } from "./sandbox.ts";
 import type { SandboxMode } from "./sandbox.ts";
@@ -84,6 +84,7 @@ export type RuntimeConfig = {
 
 export function ensureDirs(): void {
   for (const dir of [DATA_DIR, PI_CONFIG_DIR]) mkdirSync(dir, { recursive: true });
+  ensureAgentConfig();
 }
 
 export function loadConfig(): RuntimeConfig {
@@ -139,6 +140,41 @@ export function loadConfig(): RuntimeConfig {
  * credential. pi reads its own model credentials from its config directory, so nothing needed
  * is lost by dropping the rest.
  */
+/**
+ * Make sure the MCP config is where pi actually looks for it.
+ *
+ * `PI_CODING_AGENT_DIR` overrides pi's home, so pi reads `<PI_CODING_AGENT_DIR>/mcp.json`. We keep
+ * the file in `<data>/.pi/agent/mcp.json` (same place the operator edits). When those two differ,
+ * pi starts with **zero** MCP servers and the model truthfully reports "I only have read/write/exec"
+ * — a failure that looks like a personality problem and is actually a path problem.
+ *
+ * Symlink rather than copy: one source of truth, and editing either path edits both.
+ */
+export function ensureAgentConfig(): void {
+  const target = path.join(DATA_DIR, ".pi", "agent", "mcp.json");
+  const link = path.join(PI_CONFIG_DIR, "mcp.json");
+  if (!existsSync(target)) return;
+  try {
+    if (existsSync(link)) {
+      const existing = realpathSync(link);
+      if (existing === realpathSync(target)) return;
+      if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
+      else return; // a real file the operator wrote on purpose: leave it alone
+    }
+    symlinkSync(target, link);
+  } catch {
+    try {
+      copyFileSync(target, link);
+    } catch {
+      /* read-only home: pi will run without MCP, which doctor reports */
+    }
+  }
+}
+
+export function piConfigPath(): string {
+  return path.join(PI_CONFIG_DIR, "mcp.json");
+}
+
 export function piEnv(cfg: RuntimeConfig, base: Record<string, string | undefined> = process.env): Record<string, string> {
   return scrubEnv(base, {
     PI_CODING_AGENT_DIR: PI_CONFIG_DIR,

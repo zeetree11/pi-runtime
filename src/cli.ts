@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { DB_PATH, DATA_DIR, PI_CLI, ensureDirs, loadConfig, piArgs, piEnv } from "./config.ts";
+import { DB_PATH, DATA_DIR, PI_CLI, ensureDirs, loadConfig, piArgs, piConfigPath, piEnv } from "./config.ts";
 import { Store } from "./db.ts";
 import { MemoryStore } from "./memory.ts";
 import type { MemoryCategory } from "./memory.ts";
@@ -546,6 +546,7 @@ function cmdSandbox(args: string[]): number {
   console.log(`workspace   ${report.workspace}`);
   console.log(`workspace   ${report.workspaceOk ? "ok" : `拒绝：${report.workspaceReason}`}`);
   console.log(`env         ${Object.keys(piEnv(cfg)).length} 个变量（白名单，不含任何密钥）`);
+  console.log(`mcp config  ${piConfigPath()}${existsSync(piConfigPath()) ? "" : "  ← 缺失，模型将看不到任何 MCP 工具"}`);
   return report.workspaceOk ? 0 : 1;
 }
 
