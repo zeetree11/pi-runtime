@@ -53,6 +53,14 @@ function check(name, ok, detail = "") {
 
   check("no mention yields nothing", extractAttachments("今天天气不错", { workspace }).length === 0);
 
+  // 3) bare image names: the model reports a drawing as "就是 polarbear-bike.png"
+  writeFileSync(path.join(workspace, "polarbear-bike.png"), "png-bytes");
+  const bare = extractAttachments("画了，就是 polarbear-bike.png。", { workspace });
+  check("bare image name is delivered", bare.length === 1, JSON.stringify(bare));
+  check("bare name resolves in workspace", path.basename(bare[0]?.path ?? "") === "polarbear-bike.png");
+  check("bare non-image is not delivered", extractAttachments("参考 README.md 的说明", { workspace }).length === 0);
+  check("missing bare image ignored", extractAttachments("画了，就是 nope.png", { workspace }).length === 0);
+
   try { rmSync(root, { recursive: true, force: true }); } catch { /* Windows handle */ }
 }
 

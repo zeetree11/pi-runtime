@@ -43,6 +43,29 @@ export function extractAttachments(
   const found: Attachment[] = [];
   const seen = new Set<string>();
 
+  // Bare image names ("画了，就是 polarbear-bike.png") carry no workspace prefix, and that is how
+  // the model actually reports a picture it just made. Images are matched by existence in the
+  // workspace root; documents still require the explicit prefix, because prose mentions
+  // "README.md" without meaning to send anything.
+  const bareImage = /(?<![\w./-])([\w-]{1,60}\.(?:png|jpg|jpeg|gif|webp|bmp|svg))(?![^\s，。、；：！？）)」"'`])/gi;
+  for (const match of body.matchAll(bareImage)) {
+    if (found.length >= max) break;
+    const candidate = path.resolve(workspace, match[1]);
+    const rel = path.relative(workspace, candidate);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    if (seen.has(candidate)) continue;
+    let bytes = 0;
+    try {
+      const stat = statSync(candidate);
+      if (!stat.isFile() || stat.size === 0) continue;
+      bytes = stat.size;
+    } catch {
+      continue;
+    }
+    seen.add(candidate);
+    found.push({ path: candidate, bytes });
+  }
+
   // No leading boundary class: the path is often preceded by Chinese punctuation ("喏，/workspace/x"),
   // and enumerating every such character is how the first version missed the real case.
   const pattern = /(?<![\w.-])\/?workspace\/[^\s，。、；：！？）)」"'`]+/g;
