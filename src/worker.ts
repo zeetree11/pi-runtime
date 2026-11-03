@@ -143,7 +143,7 @@ export async function runTask(
 
     try {
       const result = await withRetry(
-        (attempt) => runAttempt(store, cfg, task, hooks, memory, injected, attempt),
+        (attempt) => runAttempt(store, cfg, task, hooks, memory, injected, precedenceText, attempt),
         { attempts: cfg.limits.maxAttempts, baseMs: cfg.limits.retryBaseMs, maxMs: cfg.limits.maxRetryMs },
         {
           onRetry: (attempt, delayMs, error) => {
@@ -171,6 +171,7 @@ async function runAttempt(
   hooks: RunHooks,
   memory: MemoryStore | null,
   injected: { text: string; ids: number[] },
+  precedenceText: string,
   attempt: number,
 ): Promise<string> {
   const rpc = new PiRpc({
