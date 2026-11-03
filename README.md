@@ -16,7 +16,9 @@
 
 | 能力 | 一句话 |
 |---|---|
-| **记忆** | 每条记忆绑定到一条编号事件与逐字证据，四种裁决由数据库状态决定 |
+| **记忆写入** | 每条记忆绑定到一条编号事件与逐字证据；四态裁决由数据库状态决定；置信度不足只存 `tentative`（永不注入） |
+| **记忆检索** | bge-m3（1024 维）+ SQLite 余弦；阈值按模型自适应（hash 0.12 / bge 0.55），基准 recall@5 97% |
+| **记忆冲突** | 偏好槽位去重 + `precedence` 段 + 回答扫已作废值；跨槽位用「可信度 × 时效」裁决，平局报 contested |
 | **上下文编排** | 段有稳定性、预算、淘汰顺序；跨段去重与冲突提示 |
 | **短期状态** | 端口、分支、待办链接这类"只活几天"的信息，同步写入、到期消失 |
 | **人格** | `SOUL.md`（怎么说话）+ `CONTRACTS.md`（怎么干活），常驻且独立预算 |
@@ -76,7 +78,7 @@ node src/cli.ts worker
 |---|---|---|
 | 接入 | 飞书长连接 / QQ OneBot / CLI / Telegram | 幂等 `claimMessage`，群内 @ 或唤醒词才应答 |
 | 记忆 | 证据绑定的结构化事实、四态裁决、置信度门限 | `memory.ts` + `confidence.ts`；`tentative` 永不注入 |
-| 记忆检索 | 向量检索（`memory_search`），同模型空间比较 | `memory-server.mjs`，带逐字证据 |
+| 记忆检索 | bge-m3 向量 + 余弦；阈值随模型切换；基准 20 条 × 30 查询 | `memory-server.mjs`、`bench/recall.json` |
 | 文档知识 | 切分 → 向量 → `knowledge_search` / `knowledge_add` | `knowledge.ts`，与记忆严格分离 |
 | 上下文 | 分段预算、稳定性、淘汰顺序、跨段去重、冲突提示、token 校准 | `compose.ts` |
 | 人格 | `SOUL.md`（怎么说）+ `CONTRACTS.md`（怎么干），独立字符预算 | `persona.ts` |
