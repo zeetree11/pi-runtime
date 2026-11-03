@@ -1,4 +1,8 @@
-# pi-runtime
+# Tree-Agent
+
+> 个人 Agent 运行时。名字是 Tree-Agent，内核仍然是 **pi**（`@earendil-works/pi-coding-agent`）——
+> 它不是 pi 的 fork，而是把 pi 当一个 agent 内核来封装：加持久记忆、多通道、工具治理和评测。
+> 代码里遗留的 `pi-runtime` / `pi-rt` 是运行时路径与容器名，改名会影响线上部署，故保持不变。
 
 一个跑在 **pi** 编码 agent（`@earendil-works/pi-coding-agent`）之上的个人助理运行时 —— 像平台团队封装 agent 内核那样封装它。
 

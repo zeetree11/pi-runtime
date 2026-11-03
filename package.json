@@ -1,9 +1,9 @@
 {
-  "name": "pi-runtime",
+  "name": "tree-agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Personal agent runtime built on the pi coding agent (RPC mode).",
+  "description": "Tree-Agent — a personal agent runtime that wraps the pi coding agent (RPC mode) with durable memory, channels and tool governance.",
   "engines": {
     "node": ">=22.19"
   },
