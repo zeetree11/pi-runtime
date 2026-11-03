@@ -40,6 +40,21 @@ const TOOLS = [
     },
   },
   {
+    name: "orchestrate",
+    description:
+      "把目标交给中心化编排器：它动态决定下一步派给谁，根据中间结果追加新任务，最后汇总。" +
+      "比 fanout 更适合需要「看结果再决定」的任务；fanout 更适合能一次拆干净的任务。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", description: "要完成的目标。" },
+        count: { type: "integer", minimum: 2, maximum: 5, description: "初始任务数，默认 3。" },
+      },
+      required: ["goal"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "note_write",
     description: "把一条结论写进本轮子任务的共享便签，其他子任务和汇总都能看到。用于避免重复劳动。",
     inputSchema: {
@@ -171,6 +186,11 @@ async function handle(message) {
       if (name === "fanout") {
         if (DEPTH > 0) throw new Error("子任务里不能再派生（深度上限 1）");
         const result = await call("/fanout", { prompt: args.prompt, count: args.count, scope: SCOPE });
+        reply(id, { content: [{ type: "text", text: result.digest }], isError: false });
+        return;
+      }
+      if (name === "orchestrate") {
+        const result = await call("/orchestrate", { goal: args.goal, count: args.count });
         reply(id, { content: [{ type: "text", text: result.digest }], isError: false });
         return;
       }

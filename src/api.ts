@@ -5,6 +5,7 @@ import { buildFanoutDigest, NoteStore, retryPrompt, shouldRetry, type Note } fro
 import { FileLockStore } from "./file-lock.ts";
 import { ProposalStore, describeMcpEntry } from "./proposal.ts";
 import { buildSplitPrompt, parseSubtasks, runWithLimit, type ChildSpec } from "./subagent.ts";
+import { buildSeedPrompt, orchestrate, parseSeeds } from "./orchestrate-run.ts";
 
 /**
  * Local control API.
@@ -313,6 +314,69 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           }
           deps.notes.write(currentScope, key, value, String(body.by ?? "child"));
           json(response, 200, { ok: true, scope: currentScope });
+          return;
+        }
+
+        // Dynamic orchestration: the runtime decides task by task instead of splitting once.
+        // Same session binding and quota as /fanout, because both end up speaking to the user.
+        if (request.method === "POST" && url === "/orchestrate") {
+          const body = await readJson(request);
+          const goal = String(body.goal ?? "").trim();
+          if (!goal) {
+            json(response, 400, { error: "goal 必填" });
+            return;
+          }
+          if (goal.length > 4_000) {
+            json(response, 400, { error: "goal 过长（上限 4000 字符）" });
+            return;
+          }
+          if (running) {
+            json(response, 409, { error: "已有任务在跑，稍后再试" });
+            return;
+          }
+
+          running = true;
+          const thread = deps.defaultThread ?? "default";
+          const count = Math.min(Math.max(Number(body.count ?? 3), 2), 5);
+          try {
+            const seedsOut = await deps.runChild({ prompt: buildSeedPrompt(goal, count), thread, index: 0 });
+            const seeds = parseSeeds(seedsOut, count);
+            if (seeds.length === 0) {
+              json(response, 200, { digest: "拆分失败：模型没有返回可用的初始任务列表。", tasks: [] });
+              return;
+            }
+
+            const run = await orchestrate(
+              seeds,
+              {
+                log: (message) => log(message),
+                record: (type, payload) => log(`${type} ${JSON.stringify(payload).slice(0, 200)}`),
+                runChild: async ({ prompt, thread: childThread }) =>
+                  deps.runChild({ prompt, thread: childThread, index: 1 }),
+              },
+              {
+                parentThread: thread,
+                maxSteps: Number(body.maxSteps ?? 8),
+                maxTasks: count,
+                concurrency: Number(body.concurrency ?? 2),
+              },
+            );
+
+            const ok = run.results.length;
+            const digest = [
+              `目标：${goal}`,
+              "",
+              `### 编排结果（${run.summary.done}/${run.summary.total} 完成，${run.summary.steps} 步，停止原因：${run.summary.stop}）`,
+              ...run.results.map((item) => `\n#### ${item.title}\n${item.output.slice(0, 1_200)}`),
+            ].join("\n");
+
+            log(`orchestrate done ${run.summary.done}/${run.summary.total}`);
+            json(response, 200, { digest, summary: run.summary, tasks: run.tasks.map((task) => ({ id: task.id, status: task.status, role: task.role })) });
+          } catch (error) {
+            json(response, 500, { error: error instanceof Error ? error.message : String(error) });
+          } finally {
+            running = false;
+          }
           return;
         }
 
