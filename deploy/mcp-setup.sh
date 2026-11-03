@@ -28,7 +28,9 @@ cat > "$CONF_DIR/mcp.json" <<'JSON'
       "command": "node",
       "args": ["/workspace/mcp/fetch-server.mjs"],
       "exposure": "direct",
-      "description": "读取公网网页并返回纯文本（自动去标签、限长）"
+      "description": "读取公网网页并返回纯文本（自动去标签、限长）",
+      // 默认 60 秒。子 agent / 编排任务是分钟级的，60 秒会把正常任务判成超时。
+      "timeout": 900
     }
   }
 }
@@ -36,6 +38,9 @@ JSON
 chown 10001:10001 "$CONF_DIR/mcp.json"
 chmod 600 "$CONF_DIR/mcp.json"
 cat "$CONF_DIR/mcp.json"
+
+# 编排/派发租约：超过这个时间自动放行，避免一个卡住的子任务把后续请求永久挡住。
+grep -q '^PI_RT_FANOUT_MAX_MS=' "$ENV" || echo 'PI_RT_FANOUT_MAX_MS=900000' >> "$ENV"
 
 echo "== 3) 沙箱切 full =="
 if grep -q '^PI_RT_SANDBOX=' "$ENV"; then
