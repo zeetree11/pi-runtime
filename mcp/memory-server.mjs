@@ -55,6 +55,8 @@ export async function searchMemory(query, options = {}) {
   const limit = Math.min(Math.max(Number(options.limit ?? 5), 1), 20);
 
   const { vector, model } = await embedText(trimmed);
+  // bge-style models cluster higher than the hash fallback; one threshold cannot serve both.
+  const MIN_SCORE = Number(process.env.PI_RT_MEMORY_MINSIM ?? (model.startsWith("hash") ? 0.12 : 0.55));
   const db = openReadOnly();
   try {
     const rows = db
@@ -72,7 +74,7 @@ export async function searchMemory(query, options = {}) {
       const stored = blobToVector(row.embedding ?? null);
       if (!stored || stored.length !== vector.length) continue;
       const score = cosine(vector, stored);
-      if (score < 0.12) continue;
+      if (score < MIN_SCORE) continue;
       scored.push({ row, score });
     }
     scored.sort((a, b) => b.score - a.score);
