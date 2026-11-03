@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { detectSecret } from "./secrets.ts";
 import { scoreConfidence } from "./confidence.ts";
+import { slotOf } from "./preference.ts";
 import { blobToVector as toVector, cosine } from "../mcp/lib/embed.mjs";
 
 export type MemoryCategory = "preference" | "fact" | "event";
@@ -286,6 +287,21 @@ export class MemoryStore {
     const subject = subjectOf(targetType, targetName, this.ownerName);
     const importance = Math.min(5, Math.max(1, Math.round(write.importance || 3)));
     const ts = now();
+
+    // Preference slots: "I like Python" (old, key A) and "use C++ now" (new, key B) are two rows
+    // with different keys, so the unique-key rule cannot see they contradict. Anything active in
+    // the same slot is retired here, which is what makes "latest wins" a property of the store
+    // instead of a hope about prompt ordering.
+    const slot = slotOf(`${key} ${write.content}`);
+    if (category === "preference" && slot !== "other") {
+      const stale = this.db
+        .prepare("SELECT id, key, content FROM memories WHERE status = 'active' AND category = 'preference'")
+        .all() as Array<{ id: number; key: string; content: string }>;
+      for (const item of stale) {
+        if (slotOf(`${item.key} ${item.content}`) !== slot) continue;
+        this.db.prepare("UPDATE memories SET status = 'superseded', updated_at = ? WHERE id = ?").run(ts, item.id);
+      }
+    }
 
     const byKey = this.db.prepare("SELECT * FROM memories WHERE key = ? AND status = 'active'").get(key) as MemoryRow | undefined;
     let target: MemoryRow | undefined = byKey;
