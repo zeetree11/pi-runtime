@@ -6,7 +6,7 @@
 #   sudo systemctl daemon-reload && sudo systemctl enable --now pi-rt
 [Unit]
 Description=pi-runtime personal agent
-Documentation=https://github.com/zeetree11/pi-runtime
+Documentation=https://github.com/zeetree11/Tree-Agent
 After=network-online.target
 Wants=network-online.target
 

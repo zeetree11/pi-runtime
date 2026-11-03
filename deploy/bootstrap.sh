@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-shot bootstrap for a fresh Ubuntu/Debian server.
 #
-#   curl -fsSL https://raw.githubusercontent.com/zeetree11/pi-runtime/main/deploy/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/zeetree11/Tree-Agent/main/deploy/bootstrap.sh | sudo bash
 #
 # It is deliberately chatty: every step prints PASS or FAIL with the next action, so a failed
 # run can be diagnosed from its output alone without a shell on the box.
 set -uo pipefail
 
-REPO="${PI_RT_REPO:-https://github.com/zeetree11/pi-runtime.git}"
+REPO="${PI_RT_REPO:-https://github.com/zeetree11/Tree-Agent.git}"
 DIR="${PI_RT_DIR:-/opt/pi-runtime}"
 DATA="${PI_RT_DATA:-/srv/pi-rt/data}"
 WORKSPACE="${PI_RT_WORKSPACE:-/srv/pi-rt/workspace}"

@@ -32,7 +32,7 @@ curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER && newgrp docker
 
 # 2. 取代码
-git clone https://github.com/zeetree11/pi-runtime.git /opt/pi-runtime
+git clone https://github.com/zeetree11/Tree-Agent.git /opt/pi-runtime
 cd /opt/pi-runtime
 
 # 3. 配置（唯一含密钥的文件，权限 600）
@@ -61,7 +61,7 @@ sudo apt update && sudo apt install -y git curl
 curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 sudo useradd -r -m -d /opt/pi-runtime piagent
-sudo git clone https://github.com/zeetree11/pi-runtime.git /opt/pi-runtime
+sudo git clone https://github.com/zeetree11/Tree-Agent.git /opt/pi-runtime
 cd /opt/pi-runtime && sudo npm ci --omit=dev
 sudo install -m 600 deploy/env.example /etc/pi-rt.env && sudo vim /etc/pi-rt.env
 sudo install -m 644 deploy/pi-rt.service /etc/systemd/system/pi-rt.service
