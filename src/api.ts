@@ -77,7 +77,12 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
   // Notes are scoped to the fan-out that is currently running. Single-user scale means one at a
   // time; the gate already serialises tasks per thread.
   let currentScope = "default";
-  let running = false;
+  // A boolean here was a bug with teeth: if a child task hangs (or the caller gives up and retries),
+  // the flag never clears and every later call answers "already running" forever. A lease with a
+  // hard expiry turns that permanent deadlock into a bounded wait.
+  const MAX_RUN_MS = Number(process.env.PI_RT_FANOUT_MAX_MS ?? 900_000);
+  let runningSince: number | null = null;
+  const isRunning = () => runningSince !== null && Date.now() - runningSince < MAX_RUN_MS;
 
   // Proactive sends are quota-limited per task. `send` exists so a long task can report
   // progress; without a cap it becomes a second, unchosen reply stream — and the user has no
@@ -99,7 +104,7 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
     void (async () => {
       try {
         if (request.method === "GET" && url === "/health") {
-          json(response, 200, { ok: true, running, scope: currentScope, notes: deps.notes.read(currentScope).length });
+          json(response, 200, { ok: true, running: isRunning(), scope: currentScope, notes: deps.notes.read(currentScope).length });
           return;
         }
 
@@ -330,12 +335,12 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
             json(response, 400, { error: "goal 过长（上限 4000 字符）" });
             return;
           }
-          if (running) {
+          if (isRunning()) {
             json(response, 409, { error: "已有任务在跑，稍后再试" });
             return;
           }
 
-          running = true;
+          runningSince = Date.now();
           const thread = deps.defaultThread ?? "default";
           const count = Math.min(Math.max(Number(body.count ?? 3), 2), 5);
           try {
@@ -375,7 +380,7 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           } catch (error) {
             json(response, 500, { error: error instanceof Error ? error.message : String(error) });
           } finally {
-            running = false;
+            runningSince = null;
           }
           return;
         }
@@ -391,12 +396,12 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
             json(response, 400, { error: "prompt 过长（上限 8000 字符）" });
             return;
           }
-          if (running) {
+          if (isRunning()) {
             json(response, 409, { error: "已有 fan-out 在执行，稍后再试" });
             return;
           }
 
-          running = true;
+          runningSince = Date.now();
           currentScope = String(body.scope ?? "") || `fanout-${Date.now()}`;
           const count = Math.min(Math.max(Number(body.count ?? 3), 2), maxChildren);
           const thread = deps.defaultThread ?? "default";
@@ -436,7 +441,7 @@ export function startControlServer(deps: FanoutDeps, port = Number(process.env.P
           } catch (error) {
             json(response, 500, { error: error instanceof Error ? error.message : String(error) });
           } finally {
-            running = false;
+            runningSince = null;
           }
           return;
         }
