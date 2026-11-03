@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "note": "从真实对话派生，全部 needs_review；确认后再并入 holdout",
+  "cases": [
+    {
+      "id": "dr-remind-459",
+      "goal": "提醒解析：真实消息里的一句话要能登记成提醒",
+      "kind": "task",
+      "source": {
+        "event_id": 459,
+        "speaker": "树",
+        "thread": "qq:user:3536820078"
+      },
+      "turns": [
+        {
+          "user": "16:25提醒我",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "reminder": true,
+        "time_expression": ":"
+      },
+      "needs_review": true,
+      "note": "需要人工确认 dueAt 是否正确，以及是否真的该登记"
+    },
+    {
+      "id": "dr-remind-545",
+      "goal": "提醒解析：真实消息里的一句话要能登记成提醒",
+      "kind": "task",
+      "source": {
+        "event_id": 545,
+        "speaker": "树",
+        "thread": "qq:user:3536820078"
+      },
+      "turns": [
+        {
+          "user": "请在11月12号早上9点提醒我要去912操场跑一千米",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "reminder": true,
+        "time_expression": "12号"
+      },
+      "needs_review": true,
+      "note": "需要人工确认 dueAt 是否正确，以及是否真的该登记"
+    },
+    {
+      "id": "dr-remind-547",
+      "goal": "提醒解析：真实消息里的一句话要能登记成提醒",
+      "kind": "task",
+      "source": {
+        "event_id": 547,
+        "speaker": "树",
+        "thread": "qq:user:3536820078"
+      },
+      "turns": [
+        {
+          "user": "11月19号 我要体测912 请早上九点提醒我",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "reminder": true,
+        "time_expression": "19号"
+      },
+      "needs_review": true,
+      "note": "需要人工确认 dueAt 是否正确，以及是否真的该登记"
+    }
+  ]
+}

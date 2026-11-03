@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "从真实对话派生，全部 needs_review；确认后再并入 holdout",
+  "cases": []
+}

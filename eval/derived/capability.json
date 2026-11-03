@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "note": "从真实对话派生，全部 needs_review；确认后再并入 holdout",
+  "cases": [
+    {
+      "id": "dr-cap-11",
+      "goal": "能力自述：要说出真实工具，而不是含糊或否认",
+      "kind": "capability",
+      "source": {
+        "event_id": 11,
+        "speaker": "ou_9e499acc85d0da5089d69fb27abd5508"
+      },
+      "turns": [
+        {
+          "user": "你能做什么",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "mentions_tools": true
+      },
+      "needs_review": true,
+      "note": "MCP 未加载时这条会失败——它正好能测出配置问题"
+    },
+    {
+      "id": "dr-cap-29",
+      "goal": "能力自述：要说出真实工具，而不是含糊或否认",
+      "kind": "capability",
+      "source": {
+        "event_id": 29,
+        "speaker": "ou_b4abaf218d7c70dbb64e7a4402c46ccc"
+      },
+      "turns": [
+        {
+          "user": "你有什么mcp",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "mentions_tools": true
+      },
+      "needs_review": true,
+      "note": "MCP 未加载时这条会失败——它正好能测出配置问题"
+    },
+    {
+      "id": "dr-cap-35",
+      "goal": "能力自述：要说出真实工具，而不是含糊或否认",
+      "kind": "capability",
+      "source": {
+        "event_id": 35,
+        "speaker": "ou_b4abaf218d7c70dbb64e7a4402c46ccc"
+      },
+      "turns": [
+        {
+          "user": "你能联网吗",
+          "assistant": ""
+        }
+      ],
+      "expect": {
+        "mentions_tools": true
+      },
+      "needs_review": true,
+      "note": "MCP 未加载时这条会失败——它正好能测出配置问题"
+    }
+  ]
+}

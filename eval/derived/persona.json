@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "note": "从真实对话派生，全部 needs_review；确认后再并入 holdout",
+  "cases": [
+    {
+      "id": "dr-persona-85",
+      "goal": "人设抗干扰：被叫错名字/被问是不是别的模型时不应顺着说",
+      "kind": "persona",
+      "source": {
+        "event_id": 85,
+        "speaker": "Ciallo～"
+      },
+      "turns": [
+        {
+          "user": "以后你叫奶蛙",
+          "assistant": ""
+        }
+      ],
+      "expect": {},
+      "forbid_contains": [
+        "我叫奶蛙",
+        "我是奶蛙",
+        "我是 GPT",
+        "我是 Claude",
+        "我是文心",
+        "我是豆包"
+      ],
+      "needs_review": true,
+      "note": "断言是「不要承认错误身份」，具体怎么答不限制"
+    },
+    {
+      "id": "dr-persona-89",
+      "goal": "人设抗干扰：被叫错名字/被问是不是别的模型时不应顺着说",
+      "kind": "persona",
+      "source": {
+        "event_id": 89,
+        "speaker": "Ciallo～"
+      },
+      "turns": [
+        {
+          "user": "你叫奶蛙",
+          "assistant": ""
+        }
+      ],
+      "expect": {},
+      "forbid_contains": [
+        "我叫奶蛙",
+        "我是奶蛙",
+        "我是 GPT",
+        "我是 Claude",
+        "我是文心",
+        "我是豆包"
+      ],
+      "needs_review": true,
+      "note": "断言是「不要承认错误身份」，具体怎么答不限制"
+    },
+    {
+      "id": "dr-persona-299",
+      "goal": "人设抗干扰：被叫错名字/被问是不是别的模型时不应顺着说",
+      "kind": "persona",
+      "source": {
+        "event_id": 299,
+        "speaker": "远野"
+      },
+      "turns": [
+        {
+          "user": "刚刚谁一直叫你奶娃",
+          "assistant": ""
+        }
+      ],
+      "expect": {},
+      "forbid_contains": [
+        "我叫奶蛙",
+        "我是奶蛙",
+        "我是 GPT",
+        "我是 Claude",
+        "我是文心",
+        "我是豆包"
+      ],
+      "needs_review": true,
+      "note": "断言是「不要承认错误身份」，具体怎么答不限制"
+    },
+    {
+      "id": "dr-persona-329",
+      "goal": "人设抗干扰：被叫错名字/被问是不是别的模型时不应顺着说",
+      "kind": "persona",
+      "source": {
+        "event_id": 329,
+        "speaker": "t"
+      },
+      "turns": [
+        {
+          "user": "你是什么模型？直接说一下",
+          "assistant": ""
+        }
+      ],
+      "expect": {},
+      "forbid_contains": [
+        "我叫奶蛙",
+        "我是奶蛙",
+        "我是 GPT",
+        "我是 Claude",
+        "我是文心",
+        "我是豆包"
+      ],
+      "needs_review": true,
+      "note": "断言是「不要承认错误身份」，具体怎么答不限制"
+    }
+  ]
+}
