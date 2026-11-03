@@ -25,6 +25,11 @@ export type Mem0Config = {
   collection?: string;
   /** Mem0 scopes every vector by entity; one owner is enough for a single-user runtime. */
   owner?: string;
+  /**
+   * Where the vectors live. Omitted = Mem0's in-process store (rebuilt from SQLite on boot).
+   * With Qdrant the vectors survive restarts on their own, at the cost of one more service.
+   */
+  qdrantUrl?: string;
 };
 
 export type Recalled = { key: string; eventId: number | null; text: string; score: number };
@@ -37,10 +42,19 @@ export class Mem0Engine {
   constructor(config: Mem0Config) {
     this.config = config;
     this.memory = new Memory({
-      vectorStore: {
-        provider: "memory",
-        config: { collectionName: config.collection ?? "memories" },
-      },
+      vectorStore: config.qdrantUrl
+        ? {
+            provider: "qdrant",
+            config: {
+              url: config.qdrantUrl,
+              collectionName: config.collection ?? "memories",
+              dimension: config.dimension,
+            },
+          }
+        : {
+            provider: "memory",
+            config: { collectionName: config.collection ?? "memories" },
+          },
       llm: {
         // Extraction is disabled (`infer: false`), so the LLM is never called; Mem0 still wants a
         // provider configured at construction time.
@@ -107,7 +121,7 @@ export class Mem0Engine {
 
   /** Cheap identity for logs: which model and space this engine is comparing against. */
   describe(): string {
-    return `mem0/inmemory model=${this.config.model} dim=${this.config.dimension} synced=${this.synced.size}`;
+    return `mem0/${this.config.qdrantUrl ? "qdrant" : "inmemory"} model=${this.config.model} dim=${this.config.dimension} synced=${this.synced.size}`;
   }
 }
 
@@ -123,5 +137,6 @@ export function mem0ConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Mem0Con
     model,
     dimension: Number(env.MEM0_EMBED_DIM ?? env.EMBEDDING_DIM ?? 1024),
     collection: env.MEM0_COLLECTION ?? "memories",
+    qdrantUrl: env.MEM0_QDRANT_URL,
   };
 }
