@@ -22,6 +22,8 @@ import { NoteStore } from "./fanout.ts";
 import { FileLockStore } from "./file-lock.ts";
 import { KnowledgeStore, formatHits } from "./knowledge.ts";
 import { ProposalStore } from "./proposal.ts";
+import { violations } from "./preference.ts";
+import { resolvePreferences } from "./preference.ts";
 import { FeedbackStore, appendCases, isComplaint } from "./feedback.ts";
 import { discoverSkills, formatSkills } from "./skills.ts";
 import { extractAttachments, softenMention } from "./attachments.ts";
@@ -1096,6 +1098,22 @@ async function cmdServe(args: string[]): Promise<number> {
       // Deterministic attachment fallback: if the reply names a workspace file, deliver it even
       // when the model forgot to use `send`. Instruction-following is not a guarantee; reading the
       // reply is.
+      // Guard: a reply that still uses a superseded preference value is recorded, not rewritten.
+      // Rewriting would hide the bug; the event is what makes the frequency measurable.
+      try {
+        const prefs = store ? memory.list(undefined, true).filter((row) => row.category === "preference") : [];
+        const resolved = resolvePreferences(prefs);
+        if (resolved.outdated.length > 0) {
+          const hits = violations(replyAfterReminders, resolved);
+          if (hits.length > 0) {
+            store.appendEvent(taskId, "preference_violation", { hits });
+            dim(`偏好违规：用了 ${hits.map((h) => h.staleValue).join(",")}，当前应为 ${hits[0].currentValue}`);
+          }
+        }
+      } catch (error) {
+        dim(`偏好检查失败（不影响回复）：${(error as Error).message}`);
+      }
+
       let finalReply = replyAfterReminders;
       if (media) {
         const attachments = extractAttachments(replyAfterReminders, { workspace: cfg.workspace, max: 2 });

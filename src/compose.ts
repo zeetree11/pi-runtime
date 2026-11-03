@@ -81,6 +81,8 @@ export const DEFAULT_POLICIES: Record<string, SegmentPolicy> = {
   window: { floor: 1200, cap: 2800, drop: "oldest" },
   retrieved: { floor: 0, cap: 800, drop: "lowest" },
   conflicts: { floor: 0, cap: 300, drop: "tail" },
+  // Preference precedence is short but must survive trimming: it overrides the memory block.
+  precedence: { floor: 0, cap: 400, drop: "lowest" },
   current: { floor: 0, cap: MAX, drop: "none", protected: true },
 };
 

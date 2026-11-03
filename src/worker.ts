@@ -16,6 +16,8 @@ import { withRetry } from "./retry.ts";
 import { PI_CLI, piArgs, piEnv } from "./config.ts";
 import { renderContractsPrompt, renderPersonaPrompt } from "./persona.ts";
 import { LoopGuard, extractArgs } from "./loop-guard.ts";
+import { resolveCollision } from "./resolve.ts";
+import { precedenceNote, resolvePreferences } from "./preference.ts";
 import type { RuntimeConfig } from "./config.ts";
 
 export type RunHooks = {
@@ -113,6 +115,27 @@ export async function runTask(
     const injected = memory && cfg.memoryEnabled
       ? memory.contextBlock(cfg.memoryBudgetChars, task.thread)
       : { text: "", ids: [] };
+    // Preference precedence and collision resolution are injected as their own small block: the
+    // whole point is that they must arrive *before* the model decides, with the winner named, so
+    // two contradictory memories cannot be silently averaged by the model.
+    let precedenceText = "";
+    if (memory && cfg.memoryEnabled) {
+      try {
+        const all = memory.list(undefined, true).filter((item) => item.category === "preference");
+        const resolution = resolvePreferences(all);
+        const note = precedenceNote(resolution);
+        if (note) precedenceText = note;
+        if (resolution.outdated.length > 0) {
+          store.appendEvent(task.id, "preference_superseded", {
+            current: resolution.current.map((item) => item.key),
+            outdated: resolution.outdated.map((item) => item.key),
+          });
+        }
+      } catch {
+        /* preference block is best-effort: it must never block a task */
+      }
+    }
+
     if (injected.ids.length > 0) {
       store.appendEvent(task.id, "memory_injected", { ids: injected.ids, chars: injected.text.length });
       hooks.onStatus?.(`memory: 注入 ${injected.ids.length} 条 / ${injected.text.length} 字符`);
@@ -349,6 +372,8 @@ async function runAttempt(
       ].join("\n"),
     });
     if (injected.text) segments.push({ kind: "memory", stability: "stable", body: injected.text, meta: { ids: injected.ids } });
+    // After memory, before volatile state: this block supersedes whatever memory said.
+    if (precedenceText) segments.push({ kind: "precedence", stability: "stable", body: precedenceText });
     if (shortStateBlock.text) {
       segments.push({ kind: "short_state", stability: "volatile", body: shortStateBlock.text, meta: { keys: shortStateBlock.keys } });
     }
