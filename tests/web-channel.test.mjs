@@ -81,7 +81,15 @@ const info = {
 writeFileSync(path.join(dir, "config.json"), '{"feishu":{"appSecret":"super-secret"}}');
 mkdirSync(path.join(dir, "secrets"));
 writeFileSync(path.join(dir, "secrets", "mcp.json"), '{"API_TOKEN":"tok"}');
-symlinkSync("/etc/hostname", path.join(dir, "outside.txt"));
+// 这个用例验证「符号链接指向根目录外也要被拒绝」。Windows 默认不允许普通用户建 symlink
+// （EPERM），所以建不出来时跳过相关断言，而不是让整个套件红掉。
+let symlinkReady = true;
+try {
+  symlinkSync("/etc/hostname", path.join(dir, "outside.txt"));
+} catch (error) {
+  symlinkReady = false;
+  console.log(`SKIP 符号链接用例（当前环境不允许建 symlink：${error.code}）`);
+}
 let startedTurns = 0;
 
 const server = await startWebServer({
@@ -199,7 +207,8 @@ check("config.json is not served", configFile.status === 403);
 const secretFile = await api("/api/files?path=secrets/mcp.json", { headers: authHeaders() });
 check("runtime data directory is not served", secretFile.status === 403);
 const link = await api("/api/files?path=outside.txt", { headers: authHeaders() });
-check("symlink outside the workspace is not served", link.status === 403);
+// 建不出 symlink 的环境（Windows 默认）跳过这条，而不是断言一个没被测到的路径。
+if (symlinkReady) check("symlink outside the workspace is not served", link.status === 403);
 
 async function readSse(response) {
   const raw = await response.text();
@@ -328,7 +337,7 @@ await live.close();
 memoryStore.close();
 members.close();
 store.close();
-rmSync(dir, { recursive: true, force: true });
+try { rmSync(dir, { recursive: true, force: true }); } catch { /* Windows 句柄未释放 */ }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
