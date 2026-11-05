@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -56,7 +57,17 @@ function CopyButton({ text, copyLabel, copiedLabel }: { text: string; copyLabel:
         });
       }}
     >
-      {copied ? copiedLabel : copyLabel}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={copied ? "ok" : "copy"}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.16 }}
+        >
+          {copied ? copiedLabel : copyLabel}
+        </motion.span>
+      </AnimatePresence>
     </button>
   );
 }

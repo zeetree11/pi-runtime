@@ -1,7 +1,10 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, api, applyEvent, fromServerMessage, setToken, streamMessage } from "./api";
+import { useMotionPreset } from "./motion";
 import { ChatView } from "./components/ChatView";
 import { InspectPanel } from "./components/InspectPanel";
+import { Mark } from "./components/Mark";
 import { Sidebar } from "./components/Sidebar";
 import lightHljs from "highlight.js/styles/github.css?url";
 import darkHljs from "highlight.js/styles/github-dark.css?url";
@@ -46,6 +49,13 @@ export function App() {
   streamingRef.current = streamingId;
 
   const t = useCallback((key: Key, vars?: Record<string, string | number>) => translate(locale, key, vars), [locale]);
+  const { reduce, spring } = useMotionPreset();
+
+  function toggleTheme() {
+    if (!reduce) document.documentElement.classList.add("theme-fade");
+    setTheme((value) => (value === "dark" ? "light" : "dark"));
+    window.setTimeout(() => document.documentElement.classList.remove("theme-fade"), 460);
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -188,6 +198,7 @@ export function App() {
           sessions={sessions}
           activeId={activeId}
           locale={locale}
+          thinking={streamingId !== null}
           t={t}
           onNew={() => {
             window.location.hash = "#/";
@@ -207,14 +218,16 @@ export function App() {
             <button type="button" className="icon-btn menu-btn" aria-label={t("menu")} onClick={() => setSidebar(true)}>
               <MenuIcon />
             </button>
-            <div className="min-w-0 flex-1 truncate text-sm text-muted">
-              {sessions.find((session) => session.id === activeId)?.title ?? t("newChat")}
+            <div className="brand">
+              <Mark size={22} thinking={streamingId !== null} />
+              <span>{t("appName")}</span>
             </div>
+            <div className="min-w-0 flex-1" />
             <button
               type="button"
               className="icon-btn"
               aria-label={theme === "dark" ? t("themeToLight") : t("themeToDark")}
-              onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+              onClick={toggleTheme}
             >
               {theme === "dark" ? <SunIcon /> : <MoonIcon />}
             </button>
@@ -281,13 +294,26 @@ export function App() {
               onSend={() => void send(draft)}
               onStop={() => void stop()}
               onSuggest={(text) => void send(text)}
+              onPlus={() => setPanel((value) => !value)}
               approval={approval}
               proposal={proposal}
               t={t}
               disabled={false}
             />
           ) : null}
-          {panel && status === "ready" ? <InspectPanel chatId={activeId} locale={locale} t={t} onClose={() => setPanel(false)} /> : null}
+          <AnimatePresence>
+            {panel && status === "ready" ? (
+              <motion.aside
+                className="panel"
+                initial={reduce ? false : { x: 36, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={reduce ? undefined : { x: 28, opacity: 0 }}
+                transition={spring}
+              >
+                <InspectPanel chatId={activeId} locale={locale} t={t} onClose={() => setPanel(false)} />
+              </motion.aside>
+            ) : null}
+          </AnimatePresence>
         </main>
       </div>
     </>

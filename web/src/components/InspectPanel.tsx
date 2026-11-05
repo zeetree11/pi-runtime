@@ -75,7 +75,7 @@ export function InspectPanel({
   const shown = memory.filter((item) => category === "all" || item.category === category);
 
   return (
-    <aside className="panel">
+    <aside className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between px-4 py-3">
         <h2 className="text-sm font-semibold">{t("inspect")}</h2>
         <button type="button" className="icon-btn" aria-label={t("close")} onClick={onClose}>
