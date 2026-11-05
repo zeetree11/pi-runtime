@@ -11,15 +11,10 @@ export const PI_CONFIG_DIR = process.env.PI_RT_PI_DIR
   ? path.resolve(process.env.PI_RT_PI_DIR)
   : path.join(DATA_DIR, "pi");
 export const DB_PATH = path.join(DATA_DIR, "runtime.db");
-export const PI_CLI = path.join(
-  ROOT,
-  "node_modules",
-  "@earendil-works",
-  "pi-coding-agent",
-  "dist",
-  "bundle",
-  "cli.js",
-);
+/** Tests point this at a stand-in process. Unset, it is the real pi CLI. */
+export const PI_CLI = process.env.PI_RT_PI_BIN
+  ? path.resolve(process.env.PI_RT_PI_BIN)
+  : path.join(ROOT, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
 
 export type FeishuConfig = {
   appId?: string;

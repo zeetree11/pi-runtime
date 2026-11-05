@@ -29,6 +29,11 @@ export type TaskRow = {
 const now = (): string => new Date().toISOString();
 const shortId = (): string => `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
+/** LIKE pattern for a literal thread prefix. `_` and `%` are wildcards unless escaped. */
+function likePrefix(prefix: string): string {
+  return `${prefix.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
 /**
  * The single source of truth.
  *
@@ -255,6 +260,39 @@ export class Store {
 
   eventsOf(taskId: string): Array<{ seq: number; type: string; payload: string; created_at: string }> {
     return this.db.prepare("SELECT seq, type, payload, created_at FROM events WHERE task_id = ? ORDER BY seq ASC").all(taskId) as any[];
+  }
+
+  /**
+   * Distinct conversation threads, newest activity first.
+   *
+   * `prefix` is matched literally (`web:` does not treat `_` as a LIKE wildcard). Callers that
+   * only want one channel pass that channel's thread prefix.
+   */
+  listThreads(prefix = ""): Array<{ thread: string; events: number; lastAt: string }> {
+    const sql = prefix
+      ? `SELECT thread, COUNT(*) AS events, MAX(created_at) AS last_at
+           FROM conversation_events
+          WHERE thread LIKE ? ESCAPE '\\'
+          GROUP BY thread
+          ORDER BY last_at DESC
+          LIMIT 100`
+      : `SELECT thread, COUNT(*) AS events, MAX(created_at) AS last_at
+           FROM conversation_events
+          GROUP BY thread
+          ORDER BY last_at DESC
+          LIMIT 100`;
+    const rows = (prefix
+      ? this.db.prepare(sql).all(likePrefix(prefix))
+      : this.db.prepare(sql).all()) as Array<{ thread: string; events: number; last_at: string }>;
+    return rows.map((row) => ({ thread: row.thread, events: Number(row.events), lastAt: String(row.last_at) }));
+  }
+
+  /** First user turn in a thread — the natural title for a chat list. */
+  firstUserText(thread: string): string | null {
+    const row = this.db
+      .prepare("SELECT text FROM conversation_events WHERE thread = ? AND role = 'user' ORDER BY id ASC LIMIT 1")
+      .get(thread) as { text: string } | undefined;
+    return row?.text ?? null;
   }
 
   /** Tool execution events since a timestamp, oldest first (start/end pairs are matched by id). */

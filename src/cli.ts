@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { DB_PATH, DATA_DIR, PI_CLI, ensureDirs, loadConfig, piArgs, piConfigPath, piEnv } from "./config.ts";
+import { DB_PATH, DATA_DIR, PI_CLI, ROOT, ensureDirs, loadConfig, piArgs, piConfigPath, piEnv } from "./config.ts";
 import { Store } from "./db.ts";
 import { MemoryStore } from "./memory.ts";
 import type { MemoryCategory } from "./memory.ts";
@@ -49,6 +50,7 @@ import type { Incoming } from "./gateway.ts";
 import { TelegramChannel } from "./channels/telegram.ts";
 import { FeishuChannel } from "./channels/feishu.ts";
 import { startFeishuWebhook } from "./channels/feishu-webhook.ts";
+import { inspectRuntime, listWebSessions, readWebSession, runWebTurn, startWebServer, webInfo, webThread } from "./channels/web.ts";
 
 const USAGE = `pi-runtime — a personal agent runtime built on pi
 
@@ -101,6 +103,8 @@ channels:
   node src/cli.ts serve --channel feishu      Feishu long connection (needs FEISHU_APP_ID/SECRET)
   node src/cli.ts serve --channel feishu-webhook [--port 8787]
   node src/cli.ts serve --channel qq            OneBot v11 (NapCat / Lagrange)
+  node src/cli.ts serve --channel web [--port 8788] [--host 127.0.0.1]
+                                             browser UI + SSE (loopback, or set PI_RT_WEB_TOKEN)
                                              Feishu webhook mode (testable locally)
 
 env / config.json:
@@ -922,8 +926,9 @@ async function cmdFeed(args: string[]): Promise<number> {
 async function cmdServe(args: string[]): Promise<number> {
   const channel = flagValue(args, "--channel") ?? "telegram";
   const portFlag = flagValue(args, "--port");
-  if (channel !== "telegram" && channel !== "feishu" && channel !== "feishu-webhook" && channel !== "qq") {
-    console.error(`channel "${channel}" is not implemented (available: telegram, feishu, feishu-webhook, qq)`);
+  const hostFlag = flagValue(args, "--host");
+  if (channel !== "telegram" && channel !== "feishu" && channel !== "feishu-webhook" && channel !== "qq" && channel !== "web") {
+    console.error(`channel "${channel}" is not implemented (available: telegram, feishu, feishu-webhook, qq, web)`);
     return 2;
   }
 
@@ -1195,6 +1200,92 @@ async function cmdServe(args: string[]): Promise<number> {
   process.on("SIGINT", () => controller.abort());
 
   try {
+    if (channel === "web") {
+      const port = Number(portFlag ?? process.env.PI_RT_WEB_PORT ?? 8788);
+      const host = hostFlag ?? process.env.PI_RT_WEB_HOST ?? "127.0.0.1";
+      const providedToken = process.env.PI_RT_WEB_TOKEN?.trim() ?? "";
+      const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+      if (!loopback && !providedToken) {
+        console.error("refusing to bind the web channel beyond loopback without PI_RT_WEB_TOKEN");
+        return 1;
+      }
+      const token = providedToken || randomBytes(24).toString("base64url");
+      const staticDir = path.join(ROOT, "web", "dist");
+      const knowledge = new KnowledgeStore(DATA_DIR);
+      const shortState = new ShortStateStore(DATA_DIR);
+      const server = await startWebServer({
+        port,
+        host,
+        token,
+        blockedRoots: [DATA_DIR],
+        workspace: cfg.workspace,
+        staticDir: existsSync(path.join(staticDir, "index.html")) ? staticDir : undefined,
+        info: () => webInfo(cfg, store),
+        sessions: () => listWebSessions(store),
+        session: (chatId) => {
+          const thread = webThread(chatId);
+          const approval = approvals.pendingFor(thread);
+          const proposal = proposals.pendingFor(thread);
+          return readWebSession(
+            store,
+            chatId,
+            {
+              approval: approval
+                ? { id: approval.id, action: approval.action, prompt: approval.prompt, expiresAt: approval.expiresAt }
+                : null,
+              proposal: proposal ? { id: proposal.id, path: proposal.path, rationale: proposal.rationale } : null,
+            },
+            cfg.workspace,
+          );
+        },
+        inspect: (section, params) => inspectRuntime({ cfg, store, memory, reminders: reminderStore, knowledge, shortState }, section, params),
+        turn: (input) =>
+          runWebTurn(
+            {
+              cfg,
+              store,
+              memory,
+              gateway: deps,
+              approvals,
+              proposals,
+              reminders: reminderStore,
+              feedback,
+              control,
+              busy,
+              log: dim,
+              distill: async (thread) => {
+                await runDistill(store, memory, cfg, thread, 20, dim);
+              },
+            },
+            input,
+          ),
+      });
+      const stopWebReminders = setInterval(() => {
+        void (async () => {
+          for (const reminder of reminderStore.due()) {
+            if (reminder.channel !== "web") continue;
+            try {
+              store.addConversationEvent(reminder.thread, "agent", "assistant", `⏰ ${reminder.text}`, null);
+              reminderStore.markFired(reminder.id);
+              dim(`提醒已送达 web:${reminder.chatId}`);
+            } catch (error) {
+              console.error(`reminder ${reminder.id} 发送失败：${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        })();
+      }, 30_000);
+      controller.signal.addEventListener("abort", () => clearInterval(stopWebReminders));
+      const ui = existsSync(path.join(staticDir, "index.html")) ? "serving web/dist" : "API only — cd web && npm run dev, or npm run build";
+      console.log(`web channel http://${host}:${server.port}  (${ui})`);
+      console.log("auth: bearer token required");
+      if (!providedToken) console.log(`web token: ${token}`);
+      await new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve()));
+      clearInterval(stopWebReminders);
+      shortState.close();
+      await server.close();
+      return 0;
+    }
+
     if (channel === "qq") {
       // OneBot v11: a local protocol bridge (NapCat / Lagrange) owns the QQ login; this runtime
       // only speaks its WebSocket in and HTTP out.

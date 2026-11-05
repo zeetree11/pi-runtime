@@ -20,12 +20,36 @@ import { resolveCollision } from "./resolve.ts";
 import { precedenceNote, resolvePreferences } from "./preference.ts";
 import type { RuntimeConfig } from "./config.ts";
 
+export type RunActivity =
+  | { kind: "thinking"; delta: string }
+  | {
+      kind: "tool";
+      phase: "start" | "end";
+      name: string;
+      callId?: string;
+      isError?: boolean;
+      preview?: string;
+      argsPreview?: string;
+    };
+
 export type RunHooks = {
   onText?: (delta: string) => void;
   onStatus?: (message: string) => void;
+  /** Live activity that is not part of the answer: thinking deltas and tool calls. */
+  onActivity?: (activity: RunActivity) => void;
   /** Channels ingest the user message themselves; set false to avoid a duplicate event. */
   recordUserEvent?: boolean;
+  /** When aborted, the attempt stops and a partial transcript is kept if one exists. */
+  signal?: AbortSignal;
 };
+
+/** The user stopped the turn. Not retryable — a retry would ignore the stop. */
+export class RunAbortedError extends Error {
+  constructor() {
+    super("aborted");
+    this.name = "RunAbortedError";
+  }
+}
 
 /** Event types we surface on the status line instead of the transcript. */
 const TOOL_EVENT = /^tool_|_tool_/;
@@ -72,6 +96,22 @@ function gateFor(cfg: RuntimeConfig): Gate {
 }
 
 export class BudgetExceededError extends Error {}
+
+function previewValue(value: unknown, max = 500): string | undefined {
+  if (value == null) return undefined;
+  let text: string;
+  if (typeof value === "string") text = value;
+  else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+}
 
 /**
  * Execute one task: admission control → budget → attempt → retry.
@@ -217,6 +257,12 @@ async function runAttempt(
       if (event?.type === "text_delta" && typeof event.delta === "string") {
         transcript += event.delta;
         hooks.onText?.(event.delta);
+      } else if (event && typeof event === "object") {
+        const eventType = String(event.type ?? "");
+        if (eventType.includes("think") || eventType.includes("reason")) {
+          const delta = typeof event.delta === "string" ? event.delta : typeof event.text === "string" ? event.text : "";
+          if (delta) hooks.onActivity?.({ kind: "thinking", delta });
+        }
       }
       return;
     }
@@ -232,6 +278,26 @@ async function runAttempt(
       hooks.onStatus?.(`tool → ${name}`);
 
       const callId = String(record.toolCallId ?? record.id ?? "");
+      if (record.type === "tool_execution_start") {
+        hooks.onActivity?.({
+          kind: "tool",
+          phase: "start",
+          name,
+          callId: callId || undefined,
+          argsPreview: previewValue(extractArgs(record as Record<string, unknown>), 240),
+        });
+      }
+      if (record.type === "tool_execution_end") {
+        const output = record.result ?? record.output ?? record.error ?? null;
+        hooks.onActivity?.({
+          kind: "tool",
+          phase: "end",
+          name,
+          callId: callId || undefined,
+          isError: record.isError === true || Boolean(record.error),
+          preview: previewValue(output),
+        });
+      }
       if (record.type === "tool_execution_start") {
         const decision = loopGuard.observe(name, extractArgs(record as Record<string, unknown>));
         if (decision.level === "warn") {
@@ -271,7 +337,59 @@ async function runAttempt(
     void rpc.dispose();
   }, cfg.maxMinutes * 60_000);
 
+  const onAbort = () => {
+    void rpc.dispose();
+  };
+  // Not `{ once: true }`: an abort that arrives before `rpc.start()` used to consume the
+  // listener on a dispose() that no-ops (there is no child yet), and the later prompt ran anyway.
+  hooks.signal?.addEventListener("abort", onAbort);
+
+  // Persist the transcript once, whether the model finished or the user stopped it mid-stream.
+  // Control tokens are parsed here so a partial stop still writes short-state before the user
+  // sees "I remembered it".
+  const commitTranscript = (): string => {
+    let text = transcript;
+    const parsed = extractStateDirectives(text);
+    if (parsed.directives.length > 0) {
+      text = parsed.cleaned;
+      const shortState = new ShortStateStore(cfg.dataDir);
+      try {
+        for (const directive of parsed.directives) {
+          try {
+            const row = shortState.set(directive.key, directive.value, {
+              scope: task.thread,
+              ttlMs: directive.ttl ? parseTtl(directive.ttl) : undefined,
+              sourceEventId: store.lastEventId(task.thread),
+            });
+            store.appendEvent(task.id, "state_directive", { key: row.key, ttl: directive.ttl ?? null, expires_at: row.expires_at });
+            hooks.onStatus?.(`state ← ${row.key}`);
+          } catch (error) {
+            store.appendEvent(task.id, "state_directive_rejected", {
+              key: directive.key,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+            hooks.onStatus?.(`state rejected: ${directive.key}`);
+          }
+        }
+      } finally {
+        shortState.close();
+      }
+    }
+
+    const finalText = text.trim();
+    memory?.markUsed(injected.ids);
+    store.finishTask(task.id, finalText);
+    store.addConversationEvent(task.thread, "agent", "assistant", finalText, task.id);
+    store.endSpan(rootSpan, "ok", {
+      chars: finalText.length,
+      tokens: usage?.total ?? 0,
+      aborted: Boolean(hooks.signal?.aborted),
+    });
+    return finalText;
+  };
+
   try {
+    if (hooks.signal?.aborted) throw new RunAbortedError();
     // History is read *after* the current message is stored (or skipped), so the window is
     // strictly "everything before this message" — the current text is never duplicated.
     const lastId = store.lastEventId(task.thread);
@@ -300,7 +418,8 @@ async function runAttempt(
       if (cold.length > 0 && coldChars >= cfg.summaryTriggerChars) {
         hooks.onStatus?.(`summary: 压缩 ${cold.length} 条较旧事件 / ${coldChars} 字符`);
         try {
-          const updated = await summarizeThread(cfg, state.summary, cold, cfg.summaryMaxChars);
+          const updated = await summarizeThread(cfg, state.summary, cold, cfg.summaryMaxChars, hooks.signal);
+          if (hooks.signal?.aborted) throw new RunAbortedError();
           if (updated) {
             const until = windowStart - 1;
             store.saveThreadState(task.thread, updated, until);
@@ -314,6 +433,8 @@ async function runAttempt(
             hooks.onStatus?.(`summary: 已更新到 #${until}（${updated.length} 字符）`);
           }
         } catch (error) {
+          // A stop during compression must not fall through into the main prompt.
+          if (hooks.signal?.aborted || error instanceof RunAbortedError) throw new RunAbortedError();
           // A failed compression must not fail the answer: the cursor stays put and the
           // next run retries with the same cold events.
           hooks.onStatus?.(`summary failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -426,59 +547,43 @@ async function runAttempt(
       writeFileSync(path.join(cfg.dataDir, `prompt-${task.id}.txt`), finalPrompt, "utf8");
     }
 
+    if (hooks.signal?.aborted) throw new RunAbortedError();
     rpc.start();
+    if (hooks.signal?.aborted) {
+      await rpc.dispose();
+      throw new RunAbortedError();
+    }
     hooks.onStatus?.(`pi pid=${(rpc as any).child?.pid ?? "?"} attempt=${attempt}`);
 
     const modelSpan = store.startSpan(task.id, "model", String(cfg.model ?? "default"), rootSpan, { chars: finalPrompt.length });
-    await rpc.prompt(finalPrompt, cfg.maxMinutes * 60_000 + 5_000);
+    await rpc.prompt(finalPrompt, cfg.maxMinutes * 60_000 + 5_000, hooks.signal);
     store.endSpan(modelSpan, "ok", { chars: promptChars, tokens: usage?.total ?? 0 });
 
+    if (hooks.signal?.aborted) {
+      if (transcript.trim()) return commitTranscript();
+      throw new RunAbortedError();
+    }
     if (lastError) throw new Error(lastError);
     if (!transcript.trim()) {
       throw new Error("agent finished without producing text (check model credentials)");
     }
 
-    // Control tokens are parsed here, not by a second model turn: the slot is written before
-    // the reply is stored, so "I remembered it" is true at the moment the user sees it.
-    const parsed = extractStateDirectives(transcript);
-    if (parsed.directives.length > 0) {
-      transcript = parsed.cleaned;
-      const shortState = new ShortStateStore(cfg.dataDir);
-      try {
-        for (const directive of parsed.directives) {
-          try {
-            const row = shortState.set(directive.key, directive.value, {
-              scope: task.thread,
-              ttlMs: directive.ttl ? parseTtl(directive.ttl) : undefined,
-              sourceEventId: lastId,
-            });
-            store.appendEvent(task.id, "state_directive", { key: row.key, ttl: directive.ttl ?? null, expires_at: row.expires_at });
-            hooks.onStatus?.(`state ← ${row.key}`);
-          } catch (error) {
-            store.appendEvent(task.id, "state_directive_rejected", {
-              key: directive.key,
-              reason: error instanceof Error ? error.message : String(error),
-            });
-            hooks.onStatus?.(`state rejected: ${directive.key}`);
-          }
-        }
-      } finally {
-        shortState.close();
-      }
-    }
-
-    memory?.markUsed(injected.ids);
-    store.finishTask(task.id, transcript.trim());
-    store.addConversationEvent(task.thread, "agent", "assistant", transcript.trim(), task.id);
-    store.endSpan(rootSpan, "ok", { chars: transcript.length, tokens: usage?.total ?? 0 });
-    return transcript.trim();
+    return commitTranscript();
   } catch (error) {
+    if (hooks.signal?.aborted || error instanceof RunAbortedError) {
+      for (const spanId of toolSpans.values()) store.endSpan(spanId, "error", { aborted: true });
+      toolSpans.clear();
+      if (transcript.trim()) return commitTranscript();
+      store.endSpan(rootSpan, "error", { error: "aborted" });
+      throw new RunAbortedError();
+    }
     const message = error instanceof Error ? error.message : String(error);
     store.endSpan(rootSpan, "error", { error: message.slice(0, 200) });
     const stderr = rpc.stderrTail.trim();
     throw new Error(stderr ? `${message}\n--- pi stderr ---\n${stderr.slice(-1500)}` : message);
   } finally {
     clearTimeout(wallClock);
+    hooks.signal?.removeEventListener("abort", onAbort);
     // Spend is recorded on failure too: a failed attempt still burned tokens.
     if (usage) {
       store.recordUsage(task.id, cfg.model ?? "default", usage);

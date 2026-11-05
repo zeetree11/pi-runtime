@@ -23,12 +23,12 @@
 | **短期状态** | 端口、分支、待办链接这类"只活几天"的信息，同步写入、到期消失 |
 | **人格** | `SOUL.md`（怎么说话）+ `CONTRACTS.md`（怎么干活），常驻且独立预算 |
 | **提醒** | 由模型在回复里发控制指令登记，到点由运行时主动推送 |
-| **通道** | CLI / Telegram / 飞书 / QQ（OneBot v11），同一份记忆 |
+| **通道** | CLI / Web / Telegram / 飞书 / QQ（OneBot v11），同一份记忆 |
 
 ## 架构
 
 ```
-        你（现在 CLI，之后 Web / IM）
+        你（CLI / Web / IM）
                     │
                     ▼
         ┌───────────────────────────┐
@@ -70,13 +70,35 @@ node src/cli.ts ask "总结一下这个仓库是做什么的" --cwd .
 node src/cli.ts worker
 ```
 
+## Web 前端
+
+浏览器通道是又一个 IM 适配器，不是第二套运行时。它复用 `ingest → runTask`：用户消息先落成编号事件，回复由同一个 `pi --mode rpc` 任务流式写回。界面只读记忆、技能、MCP、知识库、人格文件、提醒、短期状态和一份不含密钥的配置。
+
+```bash
+# 终端 1 — 运行时（默认只听 127.0.0.1:8788）
+node src/cli.ts serve --channel web
+
+# 终端 2 — 开发界面，把 /api 代理到上面的端口
+cd web && npm install && npm run dev
+# 打开 http://127.0.0.1:5173
+
+# 单进程：先构建，再由 web 通道直接托管 web/dist
+cd web && npm run build
+node src/cli.ts serve --channel web
+# 打开 http://127.0.0.1:8788
+```
+
+每个请求都要带 `Authorization: Bearer <token>`。没设 `PI_RT_WEB_TOKEN` 时，进程自己生成一把，打在日志里，并写进它托管的 `web/dist` 页面。开发界面（5173）要自己填这把。`--host` 离开 loopback 时必须由你显式设置 `PI_RT_WEB_TOKEN`。端口可用 `--port` 或 `PI_RT_WEB_PORT`。浏览器只接受 `127.0.0.1` / `localhost` 的 Host，以及本端口和 `5173` 的 Origin。
+
+会话就是线程 `web:<id>`。侧栏标题取自首条用户消息。运行时没有重命名或删除线程的接口，所以界面也不提供。停止生成会中止当前这次 `pi` 调用；已经流出的文字会留下来。
+
 ## 能力全景
 
 一个运行中的实例（飞书 + QQ 双通道，共用一份记忆）当前具备：
 
 | 层 | 能力 | 关键实现 |
 |---|---|---|
-| 接入 | 飞书长连接 / QQ OneBot / CLI / Telegram | 幂等 `claimMessage`，群内 @ 或唤醒词才应答 |
+| 接入 | 飞书长连接 / QQ OneBot / CLI / Web / Telegram | 幂等 `claimMessage`，群内 @ 或唤醒词才应答；Web 用 SSE |
 | 记忆 | 证据绑定的结构化事实、四态裁决、置信度门限 | `memory.ts` + `confidence.ts`；`tentative` 永不注入 |
 | 记忆检索 | bge-m3 向量 + 余弦；阈值随模型切换；基准 20 条 × 30 查询 | `memory-server.mjs`、`bench/recall.json` |
 | 文档知识 | 切分 → 向量 → `knowledge_search` / `knowledge_add` | `knowledge.ts`，与记忆严格分离 |
@@ -112,7 +134,7 @@ node src/cli.ts worker
 | `calibrate` | 用真实用量校准 token 估算 |
 | `sandbox` | 查看当前工具能力策略 |
 | `eval [--cases f] [--repeat n]` | 跑记忆抽取评测 |
-| `serve --channel <c>` | 起服务：telegram / feishu / feishu-webhook / qq |
+| `serve --channel <c>` | 起服务：telegram / feishu / feishu-webhook / qq / web |
 
 ## 记忆
 
@@ -918,7 +940,7 @@ recency      事实 90 天、事件 365 天、偏好约 2 年（半衰期）
 **已知缺口：**
 
 - 富媒体（图片 / 文件 / 语音）直接丢弃
-- 流式输出：pi 有 `text_delta`，但没有推送到 IM 的出口（飞书支持消息更新，QQ 不支持）
+- 流式输出：Web 通道把 `text_delta` / 思考增量 / 工具事件走 SSE 推到浏览器。飞书和 QQ 仍然等整段回复结束后一次发出（飞书支持消息更新，QQ 不支持）
 - 检索质量：默认 hash embedding 只抓字面相似，未接真实 embedding；无 rerank、无 query 改写
 - 事件层未脱敏：含密码的原始消息仍明文存在 `conversation_events`
 - 单条评测用例在不同运行间抖动（30 题里约 4 条），尚未定位
