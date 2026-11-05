@@ -46,7 +46,9 @@ export async function summarizeThread(
   previousSummary: string,
   events: ConversationEventRow[],
   maxChars: number,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw new Error("aborted");
   const transcript = events
     .map((event) => `[${event.role === "assistant" ? "助手" : event.speaker}] ${event.text}`)
     .join("\n");
@@ -77,10 +79,16 @@ export async function summarizeThread(
     }
   });
 
+  const onAbort = () => {
+    void rpc.dispose();
+  };
+  signal?.addEventListener("abort", onAbort);
   try {
     rpc.start();
-    await rpc.prompt(prompt, 180_000);
+    if (signal?.aborted) throw new Error("aborted");
+    await rpc.prompt(prompt, 180_000, signal);
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     await rpc.dispose();
   }
 

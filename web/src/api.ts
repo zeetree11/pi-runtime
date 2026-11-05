@@ -26,6 +26,8 @@ export class ApiError extends Error {
 }
 
 export function getToken(): string {
+  const injected = (globalThis as { __PI_RT_TOKEN__?: string }).__PI_RT_TOKEN__;
+  if (typeof injected === "string" && injected.trim()) return injected.trim();
   return localStorage.getItem(TOKEN_KEY) ?? "";
 }
 

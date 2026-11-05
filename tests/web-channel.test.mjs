@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Store } from "../src/db.ts";
@@ -77,17 +78,25 @@ const info = {
   usageToday: { total: 0, cost: 0, runs: 0 },
 };
 
+writeFileSync(path.join(dir, "config.json"), '{"feishu":{"appSecret":"super-secret"}}');
+mkdirSync(path.join(dir, "secrets"));
+writeFileSync(path.join(dir, "secrets", "mcp.json"), '{"API_TOKEN":"tok"}');
+symlinkSync("/etc/hostname", path.join(dir, "outside.txt"));
+let startedTurns = 0;
+
 const server = await startWebServer({
   port: 0,
   host: "127.0.0.1",
   token: "test-token",
   workspace: dir,
+  blockedRoots: [path.join(dir, "secrets")],
   staticDir: dir,
   info: () => info,
   sessions: () => listWebSessions(store),
   session: (chatId) => readWebSession(store, chatId, {}, dir),
   inspect: (section) => ({ section, items: section === "memory" ? [] : undefined }),
   turn: async ({ chatId, text, emit, signal }) => {
+    startedTurns += 1;
     emit({ type: "status", message: "started" });
     emit({ type: "thinking", delta: "想一下" });
     emit({ type: "text", delta: `收到：${text}` });
@@ -120,6 +129,43 @@ check("health reports the runtime", health.status === 200 && healthBody.model ==
 const preflight = await api("/api/health", { method: "OPTIONS", headers: { origin: "http://127.0.0.1:5173" } });
 check("preflight allows the dev server", preflight.status === 204 && preflight.headers.get("access-control-allow-origin") === "http://127.0.0.1:5173");
 
+const evilPreflight = await api("/api/health", {
+  method: "OPTIONS",
+  headers: {
+    origin: "https://evil.example",
+    "access-control-request-method": "POST",
+    "access-control-request-headers": "content-type, authorization",
+  },
+});
+check(
+  "evil origin preflight is not granted",
+  evilPreflight.status === 403 && evilPreflight.headers.get("access-control-allow-origin") === null,
+);
+
+const evilTurn = await api("/api/sessions/c_evil/messages", {
+  method: "POST",
+  headers: authHeaders({ origin: "https://evil.example", "content-type": "application/json" }),
+  body: JSON.stringify({ text: "pwn" }),
+});
+check("evil origin cannot start a turn", evilTurn.status === 403 && startedTurns === 0, `status ${evilTurn.status} turns ${startedTurns}`);
+
+const rebound = await new Promise((resolve) => {
+  const req = httpRequest(
+    {
+      hostname: "127.0.0.1",
+      port: server.port,
+      path: "/api/health",
+      headers: { host: "evil.example", authorization: "Bearer test-token" },
+    },
+    (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode));
+    },
+  );
+  req.end();
+});
+check("non-loopback Host is refused", rebound === 403, String(rebound));
+
 const listedHttp = await api("/api/sessions", { headers: authHeaders() });
 const listedBody = await listedHttp.json();
 check("session list is served", listedBody.sessions.length === 2);
@@ -148,6 +194,12 @@ const file = await api("/api/files?path=note.txt", { headers: authHeaders() });
 check("allow-listed workspace file is readable", file.status === 200 && (await file.text()) === "hello");
 const sneak = await api("/api/files?path=../package.json", { headers: authHeaders() });
 check("file route rejects traversal", sneak.status === 403);
+const configFile = await api("/api/files?path=config.json", { headers: authHeaders() });
+check("config.json is not served", configFile.status === 403);
+const secretFile = await api("/api/files?path=secrets/mcp.json", { headers: authHeaders() });
+check("runtime data directory is not served", secretFile.status === 403);
+const link = await api("/api/files?path=outside.txt", { headers: authHeaders() });
+check("symlink outside the workspace is not served", link.status === 403);
 
 async function readSse(response) {
   const raw = await response.text();
@@ -242,12 +294,16 @@ const live = await startWebServer({
     ),
 });
 
-const open = await fetch(`http://127.0.0.1:${live.port}/api/health`);
-check("loopback server without a token stays open", open.status === 200);
+const bare = await fetch(`http://127.0.0.1:${live.port}/api/health`);
+check("generated token is not optional", bare.status === 401 && live.token.length > 16);
+const open = await fetch(`http://127.0.0.1:${live.port}/api/health`, {
+  headers: { authorization: `Bearer ${live.token}` },
+});
+check("generated token is accepted", open.status === 200);
 
 const turn = await fetch(`http://127.0.0.1:${live.port}/api/sessions/c_live/messages`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", authorization: `Bearer ${live.token}` },
   body: JSON.stringify({ text: "这个仓库是做什么的", messageId: "m_live" }),
 });
 const turnEvents = await readSse(turn);
@@ -257,7 +313,7 @@ check("runWebTurn finishes the turn", turnEvents.at(-1)?.type === "done" && turn
 
 const again = await fetch(`http://127.0.0.1:${live.port}/api/sessions/c_live/messages`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", authorization: `Bearer ${live.token}` },
   body: JSON.stringify({ text: "这个仓库是做什么的", messageId: "m_live" }),
 });
 const againEvents = await readSse(again);

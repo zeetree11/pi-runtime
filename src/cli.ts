@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -1202,12 +1203,13 @@ async function cmdServe(args: string[]): Promise<number> {
     if (channel === "web") {
       const port = Number(portFlag ?? process.env.PI_RT_WEB_PORT ?? 8788);
       const host = hostFlag ?? process.env.PI_RT_WEB_HOST ?? "127.0.0.1";
-      const token = process.env.PI_RT_WEB_TOKEN?.trim() ?? "";
+      const providedToken = process.env.PI_RT_WEB_TOKEN?.trim() ?? "";
       const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-      if (!loopback && !token) {
+      if (!loopback && !providedToken) {
         console.error("refusing to bind the web channel beyond loopback without PI_RT_WEB_TOKEN");
         return 1;
       }
+      const token = providedToken || randomBytes(24).toString("base64url");
       const staticDir = path.join(ROOT, "web", "dist");
       const knowledge = new KnowledgeStore(DATA_DIR);
       const shortState = new ShortStateStore(DATA_DIR);
@@ -1215,6 +1217,7 @@ async function cmdServe(args: string[]): Promise<number> {
         port,
         host,
         token,
+        blockedRoots: [DATA_DIR],
         workspace: cfg.workspace,
         staticDir: existsSync(path.join(staticDir, "index.html")) ? staticDir : undefined,
         info: () => webInfo(cfg, store),
@@ -1274,7 +1277,8 @@ async function cmdServe(args: string[]): Promise<number> {
       controller.signal.addEventListener("abort", () => clearInterval(stopWebReminders));
       const ui = existsSync(path.join(staticDir, "index.html")) ? "serving web/dist" : "API only — cd web && npm run dev, or npm run build";
       console.log(`web channel http://${host}:${server.port}  (${ui})`);
-      if (token) console.log("auth: bearer token required");
+      console.log("auth: bearer token required");
+      if (!providedToken) console.log(`web token: ${token}`);
       await new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve()));
       clearInterval(stopWebReminders);
       shortState.close();

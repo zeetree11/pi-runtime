@@ -88,7 +88,7 @@ node src/cli.ts serve --channel web
 # 打开 http://127.0.0.1:8788
 ```
 
-对外绑定时必须设置 `PI_RT_WEB_TOKEN`，请求带 `Authorization: Bearer <token>`。不设令牌时，`--host` 只能是 loopback。端口可用 `--port` 或 `PI_RT_WEB_PORT`。
+每个请求都要带 `Authorization: Bearer <token>`。没设 `PI_RT_WEB_TOKEN` 时，进程自己生成一把，打在日志里，并写进它托管的 `web/dist` 页面。开发界面（5173）要自己填这把。`--host` 离开 loopback 时必须由你显式设置 `PI_RT_WEB_TOKEN`。端口可用 `--port` 或 `PI_RT_WEB_PORT`。浏览器只接受 `127.0.0.1` / `localhost` 的 Host，以及本端口和 `5173` 的 Origin。
 
 会话就是线程 `web:<id>`。侧栏标题取自首条用户消息。运行时没有重命名或删除线程的接口，所以界面也不提供。停止生成会中止当前这次 `pi` 调用；已经流出的文字会留下来。
 

@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { ApprovalStore } from "../approval.ts";
 import { extractAskDirectives, parseDecision } from "../approval.ts";
@@ -293,28 +293,67 @@ export type WorkspaceFile =
   | { ok: true; abs: string; relative: string; bytes: number; ext: string }
   | { ok: false; status: number; error: string };
 
-/** Same confinement as the control API's file send: workspace root, allow-listed type, size cap. */
-export function resolveWorkspaceFile(workspace: string, rawPath: string): WorkspaceFile {
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+/**
+ * A file the browser may download.
+ *
+ * The lexical path is not enough: a symlink inside the workspace can point at config or the
+ * data directory. Resolve the real path, then refuse anything outside the workspace, anything
+ * under a blocked root (the runtime data dir), and `config.json` by name.
+ */
+export function resolveWorkspaceFile(workspace: string, rawPath: string, blockedRoots: string[] = []): WorkspaceFile {
   const trimmed = String(rawPath ?? "").trim();
   if (!trimmed) return { ok: false, status: 400, error: "path 必填" };
   const root = path.resolve(workspace);
   const resolved = path.resolve(root, trimmed);
   const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isInside(root, resolved)) {
     return { ok: false, status: 403, error: "只能读取工作区内的文件" };
   }
   const ext = path.extname(resolved).toLowerCase();
   if (!FILE_EXT.includes(ext)) return { ok: false, status: 400, error: `不支持的文件类型 ${ext || "(无扩展名)"}` };
+  if (path.basename(resolved).toLowerCase() === "config.json") {
+    return { ok: false, status: 403, error: "不能读取配置文件" };
+  }
+  let realRoot: string;
+  let realFile: string;
+  try {
+    realRoot = realpathSync(root);
+    realFile = realpathSync(resolved);
+  } catch {
+    return { ok: false, status: 404, error: "文件不存在" };
+  }
+  if (!isInside(realRoot, realFile)) {
+    return { ok: false, status: 403, error: "只能读取工作区内的文件" };
+  }
+  if (path.basename(realFile).toLowerCase() === "config.json") {
+    return { ok: false, status: 403, error: "不能读取配置文件" };
+  }
+  for (const blocked of blockedRoots) {
+    let realBlocked: string;
+    try {
+      realBlocked = realpathSync(path.resolve(blocked));
+    } catch {
+      continue;
+    }
+    if (isInside(realBlocked, realFile)) {
+      return { ok: false, status: 403, error: "不能读取运行时数据目录" };
+    }
+  }
   let size = 0;
   try {
-    const stat = statSync(resolved);
+    const stat = statSync(realFile);
     if (!stat.isFile()) return { ok: false, status: 404, error: "不是文件" };
     size = stat.size;
   } catch {
     return { ok: false, status: 404, error: "文件不存在" };
   }
   if (size > MAX_FILE_BYTES) return { ok: false, status: 413, error: "文件过大" };
-  return { ok: true, abs: resolved, relative: relative.split(path.sep).join("/"), bytes: size, ext };
+  return { ok: true, abs: realFile, relative: relative.split(path.sep).join("/"), bytes: size, ext };
 }
 
 export type WebTurnDeps = {
@@ -521,7 +560,10 @@ function emitStoppedOrError(emit: (event: WebEvent) => void, signal: AbortSignal
 export type WebServerOptions = {
   port?: number;
   host?: string;
+  /** When omitted, a random token is generated and returned on the server handle. */
   token?: string;
+  /** Real directories the file route must not read, even if they sit inside the workspace. */
+  blockedRoots?: string[];
   staticDir?: string;
   workspace: string;
   info: () => WebInfo;
@@ -531,12 +573,16 @@ export type WebServerOptions = {
   turn: (input: { chatId: string; text: string; messageId?: string; emit: (event: WebEvent) => void; signal: AbortSignal }) => Promise<void>;
 };
 
-export type WebServer = { port: number; host: string; close: () => Promise<void> };
+export type WebServer = { port: number; host: string; token: string; close: () => Promise<void> };
+
+const DEV_ORIGIN_PORTS = [5173];
 
 export function startWebServer(options: WebServerOptions): Promise<WebServer> {
   const host = options.host ?? "127.0.0.1";
-  const token = options.token?.trim() || "";
+  const token = options.token?.trim() || randomBytes(24).toString("base64url");
+  const blockedRoots = options.blockedRoots ?? [];
   const inflight = new Map<string, AbortController>();
+  let boundPort = options.port && options.port > 0 ? options.port : 0;
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error) => {
@@ -552,26 +598,35 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
 
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (!loopbackHost(request)) {
+      response.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("forbidden host");
+      return;
+    }
+    const origin = originOf(request);
+    if (origin && !originAllowed(origin, boundPort)) {
+      response.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("forbidden origin");
+      return;
+    }
     if (request.method === "OPTIONS" && url.pathname.startsWith("/api/")) {
-      cors(request, response);
+      writeCors(response, origin);
       response.writeHead(204).end();
       return;
     }
     if (url.pathname.startsWith("/api/") && !authorized(request, token, url)) {
-      json(response, request, 401, { error: "需要访问令牌" });
+      json(response, request, 401, { error: "需要访问令牌" }, origin);
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/api/health") {
-      json(response, request, 200, options.info());
+      json(response, request, 200, options.info(), origin);
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
-      json(response, request, 200, { sessions: options.sessions() });
+      json(response, request, 200, { sessions: options.sessions() }, origin);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/sessions") {
-      json(response, request, 201, { id: newChatId() });
+      json(response, request, 201, { id: newChatId() }, origin);
       return;
     }
 
@@ -579,10 +634,10 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
     if (request.method === "GET" && sessionMatch) {
       const chatId = decodeURIComponent(sessionMatch[1]);
       if (!CHAT_ID.test(chatId)) {
-        json(response, request, 400, { error: "会话 id 不合法" });
+        json(response, request, 400, { error: "会话 id 不合法" }, origin);
         return;
       }
-      json(response, request, 200, options.session(chatId));
+      json(response, request, 200, options.session(chatId), origin);
       return;
     }
 
@@ -590,31 +645,31 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
     if (request.method === "POST" && messageMatch) {
       const chatId = decodeURIComponent(messageMatch[1]);
       if (!CHAT_ID.test(chatId)) {
-        json(response, request, 400, { error: "会话 id 不合法" });
+        json(response, request, 400, { error: "会话 id 不合法" }, origin);
         return;
       }
       if (inflight.has(chatId)) {
-        json(response, request, 409, { error: "这条会话正在回复" });
+        json(response, request, 409, { error: "这条会话正在回复" }, origin);
         return;
       }
       const body = await readJson(request);
       const text = String(body.text ?? "");
       if (!text.trim()) {
-        json(response, request, 400, { error: "消息为空" });
+        json(response, request, 400, { error: "消息为空" }, origin);
         return;
       }
       if ([...text].length > MAX_MESSAGE_CHARS) {
-        json(response, request, 413, { error: `消息过长（上限 ${MAX_MESSAGE_CHARS} 字符）` });
+        json(response, request, 413, { error: `消息过长（上限 ${MAX_MESSAGE_CHARS} 字符）` }, origin);
         return;
       }
       const messageId = typeof body.messageId === "string" ? body.messageId : undefined;
       if (messageId && !CHAT_ID.test(messageId)) {
-        json(response, request, 400, { error: "messageId 不合法" });
+        json(response, request, 400, { error: "messageId 不合法" }, origin);
         return;
       }
       const controller = new AbortController();
       inflight.set(chatId, controller);
-      cors(request, response);
+      writeCors(response, origin);
       response.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
@@ -645,29 +700,29 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
       const chatId = decodeURIComponent(stopMatch[1]);
       const current = inflight.get(chatId);
       if (!current) {
-        json(response, request, 404, { error: "没有进行中的回复" });
+        json(response, request, 404, { error: "没有进行中的回复" }, origin);
         return;
       }
       current.abort();
-      json(response, request, 200, { ok: true });
+      json(response, request, 200, { ok: true }, origin);
       return;
     }
 
     const inspectMatch = /^\/api\/(memory|skills|mcp|knowledge|persona|reminders|state|config)$/.exec(url.pathname);
     if (request.method === "GET" && inspectMatch) {
-      json(response, request, 200, options.inspect(inspectMatch[1], url.searchParams));
+      json(response, request, 200, options.inspect(inspectMatch[1], url.searchParams), origin);
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/api/files") {
-      const resolved = resolveWorkspaceFile(options.workspace, url.searchParams.get("path") ?? "");
+      const resolved = resolveWorkspaceFile(options.workspace, url.searchParams.get("path") ?? "", blockedRoots);
       if (!resolved.ok) {
-        json(response, request, resolved.status, { error: resolved.error });
+        json(response, request, resolved.status, { error: resolved.error }, origin);
         return;
       }
       const body = readFileSync(resolved.abs);
       const inline = INLINE_EXT.has(resolved.ext);
-      cors(request, response);
+      writeCors(response, origin);
       response.writeHead(200, {
         "content-type": mimeFor(resolved.ext),
         "content-length": body.length,
@@ -680,7 +735,7 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
     }
 
     if (request.method === "GET" && options.staticDir && !url.pathname.startsWith("/api/")) {
-      if (serveStatic(options.staticDir, url.pathname, response)) return;
+      if (serveStatic(options.staticDir, url.pathname, response, token)) return;
     }
 
     if (request.method === "GET" && url.pathname === "/" && !options.staticDir) {
@@ -688,12 +743,12 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
 <p>Web 通道已在 <code>${host}:${options.port ?? ""}</code> 监听。</p>
 <p>开发界面：在 <code>web/</code> 里运行 <code>npm run dev</code>，打开 <code>http://127.0.0.1:5173</code>。</p>
 <p>或先 <code>npm run build</code>，再由本进程托管 <code>web/dist</code>。</p></body>`;
-      cors(request, response);
+      writeCors(response, origin);
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
       return;
     }
 
-    json(response, request, 404, { error: "not found" });
+    json(response, request, 404, { error: "not found" }, origin);
   }
 
   return new Promise((resolve, reject) => {
@@ -701,9 +756,11 @@ export function startWebServer(options: WebServerOptions): Promise<WebServer> {
     server.listen(options.port ?? 0, host, () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : Number(options.port ?? 0);
+      boundPort = port;
       resolve({
         port,
         host,
+        token,
         close: () =>
           new Promise<void>((done) => {
             for (const controller of inflight.values()) controller.abort();
@@ -719,13 +776,49 @@ function newChatId(): string {
 }
 
 function authorized(request: IncomingMessage, token: string, url: URL): boolean {
-  if (!token) return true;
+  if (!token) return false;
   const header = request.headers.authorization ?? "";
   const prefix = "Bearer ";
   if (header.startsWith(prefix) && safeEqual(header.slice(prefix.length), token)) return true;
   // File links are ordinary navigations, so they cannot set an Authorization header.
   const query = url.searchParams.get("access_token") ?? "";
   return Boolean(query) && safeEqual(query, token);
+}
+
+function originOf(request: IncomingMessage): string | undefined {
+  const origin = request.headers.origin;
+  return typeof origin === "string" && origin ? origin : undefined;
+}
+
+/** DNS rebinding sends a public Host that happens to resolve here. Only loopback names are served. */
+function loopbackHost(request: IncomingMessage): boolean {
+  const raw = request.headers.host;
+  if (!raw) return false;
+  let hostname = raw;
+  if (hostname.startsWith("[")) {
+    const end = hostname.indexOf("]");
+    hostname = end === -1 ? hostname : hostname.slice(1, end);
+  } else {
+    hostname = hostname.replace(/:\d+$/, "");
+  }
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+function originAllowed(origin: string, port: number): boolean {
+  const allowed = new Set<string>();
+  for (const name of ["127.0.0.1", "localhost"]) {
+    if (port > 0) allowed.add(`http://${name}:${port}`);
+    for (const dev of DEV_ORIGIN_PORTS) allowed.add(`http://${name}:${dev}`);
+  }
+  return allowed.has(origin);
+}
+
+function writeCors(response: ServerResponse, origin: string | undefined): void {
+  if (!origin) return;
+  response.setHeader("access-control-allow-origin", origin);
+  response.setHeader("vary", "origin");
+  response.setHeader("access-control-allow-headers", "content-type, authorization");
+  response.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
 }
 
 function safeEqual(left: string, right: string): boolean {
@@ -735,18 +828,8 @@ function safeEqual(left: string, right: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-function cors(request: IncomingMessage, response: ServerResponse): void {
-  const origin = request.headers.origin;
-  if (typeof origin === "string" && origin) {
-    response.setHeader("access-control-allow-origin", origin);
-    response.setHeader("vary", "origin");
-  }
-  response.setHeader("access-control-allow-headers", "content-type, authorization");
-  response.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-}
-
-function json(response: ServerResponse, request: IncomingMessage, status: number, body: unknown): void {
-  cors(request, response);
+function json(response: ServerResponse, _request: IncomingMessage, status: number, body: unknown, origin?: string): void {
+  writeCors(response, origin);
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(body));
 }
@@ -779,7 +862,12 @@ function mimeFor(ext: string): string {
   return "application/octet-stream";
 }
 
-function serveStatic(rootDir: string, pathname: string, response: ServerResponse): boolean {
+function injectToken(html: string, token: string): string {
+  const tag = `<script>window.__PI_RT_TOKEN__=${JSON.stringify(token)};</script>`;
+  return html.includes("</head>") ? html.replace("</head>", `${tag}</head>`) : tag + html;
+}
+
+function serveStatic(rootDir: string, pathname: string, response: ServerResponse, token: string): boolean {
   const root = path.resolve(rootDir);
   if (!existsSync(root)) return false;
   const requested = pathname === "/" ? "/index.html" : pathname;
@@ -789,15 +877,18 @@ function serveStatic(rootDir: string, pathname: string, response: ServerResponse
     response.writeHead(403).end("forbidden");
     return true;
   }
-  if (existsSync(target) && statSync(target).isFile()) {
-    const ext = path.extname(target).toLowerCase();
-    const body = readFileSync(target);
+  const send = (file: string, ext: string) => {
+    let body: Buffer | string = readFileSync(file);
+    if (path.basename(file) === "index.html") body = injectToken(body.toString("utf8"), token);
     response.writeHead(200, {
       "content-type": STATIC_MIME[ext] ?? "application/octet-stream",
-      "content-length": body.length,
+      "content-length": Buffer.byteLength(body),
       "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600",
     });
     response.end(body);
+  };
+  if (existsSync(target) && statSync(target).isFile()) {
+    send(target, path.extname(target).toLowerCase());
     return true;
   }
   if (path.extname(requested)) {
@@ -806,9 +897,7 @@ function serveStatic(rootDir: string, pathname: string, response: ServerResponse
   }
   const index = path.join(root, "index.html");
   if (!existsSync(index)) return false;
-  const body = readFileSync(index);
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "content-length": body.length });
-  response.end(body);
+  send(index, ".html");
   return true;
 }
 

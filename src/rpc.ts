@@ -99,25 +99,65 @@ export class PiRpc extends EventEmitter {
    * Prompt the agent and resolve once it stops moving on its own.
    * `agent_end` is not the end: retries, compaction and queued work can follow.
    * `agent_settled` is the real "nothing more will happen" signal.
+   *
+   * The settle waiter is armed *before* the prompt is sent, and it is rejected if the child
+   * exits or the caller aborts. Otherwise a dead process leaves the promise pending until the
+   * wall clock, and a rejection nobody awaited becomes an unhandledRejection one timeout later.
    */
-  async prompt(message: string, timeoutMs = 30 * 60_000): Promise<void> {
+  async prompt(message: string, timeoutMs = 30 * 60_000, signal?: AbortSignal): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    let onRecord: ((record: RpcRecord) => void) | undefined;
+    let onExit: ((info: { code: number | null; signal: NodeJS.Signals | null }) => void) | undefined;
+    let onAbort: (() => void) | undefined;
+    let done = false;
+    let settle!: (error?: Error) => void;
+
     const settled = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off("record", onRecord);
-        reject(new Error(`prompt did not settle within ${timeoutMs}ms`));
-      }, timeoutMs);
-      const onRecord = (record: RpcRecord) => {
-        if (record.type === "agent_settled") {
-          clearTimeout(timer);
-          this.off("record", onRecord);
-          resolve();
-        }
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (onRecord) this.off("record", onRecord);
+        if (onExit) this.off("exit", onExit);
+        if (onAbort) signal?.removeEventListener("abort", onAbort);
+      };
+      settle = (error?: Error) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve();
+      };
+      timer = setTimeout(() => settle(new Error(`prompt did not settle within ${timeoutMs}ms`)), timeoutMs);
+      onRecord = (record) => {
+        if (record.type === "agent_settled") settle();
+      };
+      onExit = (info) => settle(new Error(`pi exited (${info?.code ?? info?.signal})`));
+      onAbort = () => {
+        settle(new Error("aborted"));
+        void this.dispose();
       };
       this.on("record", onRecord);
+      this.on("exit", onExit);
+      if (signal?.aborted) settle(new Error("aborted"));
+      else signal?.addEventListener("abort", onAbort);
     });
 
-    await this.request("prompt", { message });
-    await settled;
+    // Attach the rejection handler before any await. If the prompt command fails, this promise
+    // is still rejected by exit or by the timeout, and nothing else is awaiting it.
+    let captured: Error | undefined;
+    const observed = settled.then(
+      () => undefined,
+      (error: Error) => {
+        captured = error;
+      },
+    );
+
+    try {
+      await this.request("prompt", { message });
+      await observed;
+      if (captured) throw captured;
+    } finally {
+      settle(new Error("prompt abandoned"));
+    }
   }
 
   /** Graceful shutdown: close stdin, then kill if the process lingers. */

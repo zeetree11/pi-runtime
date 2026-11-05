@@ -340,7 +340,9 @@ async function runAttempt(
   const onAbort = () => {
     void rpc.dispose();
   };
-  hooks.signal?.addEventListener("abort", onAbort, { once: true });
+  // Not `{ once: true }`: an abort that arrives before `rpc.start()` used to consume the
+  // listener on a dispose() that no-ops (there is no child yet), and the later prompt ran anyway.
+  hooks.signal?.addEventListener("abort", onAbort);
 
   // Persist the transcript once, whether the model finished or the user stopped it mid-stream.
   // Control tokens are parsed here so a partial stop still writes short-state before the user
@@ -416,7 +418,8 @@ async function runAttempt(
       if (cold.length > 0 && coldChars >= cfg.summaryTriggerChars) {
         hooks.onStatus?.(`summary: 压缩 ${cold.length} 条较旧事件 / ${coldChars} 字符`);
         try {
-          const updated = await summarizeThread(cfg, state.summary, cold, cfg.summaryMaxChars);
+          const updated = await summarizeThread(cfg, state.summary, cold, cfg.summaryMaxChars, hooks.signal);
+          if (hooks.signal?.aborted) throw new RunAbortedError();
           if (updated) {
             const until = windowStart - 1;
             store.saveThreadState(task.thread, updated, until);
@@ -430,6 +433,8 @@ async function runAttempt(
             hooks.onStatus?.(`summary: 已更新到 #${until}（${updated.length} 字符）`);
           }
         } catch (error) {
+          // A stop during compression must not fall through into the main prompt.
+          if (hooks.signal?.aborted || error instanceof RunAbortedError) throw new RunAbortedError();
           // A failed compression must not fail the answer: the cursor stays put and the
           // next run retries with the same cold events.
           hooks.onStatus?.(`summary failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -542,11 +547,16 @@ async function runAttempt(
       writeFileSync(path.join(cfg.dataDir, `prompt-${task.id}.txt`), finalPrompt, "utf8");
     }
 
+    if (hooks.signal?.aborted) throw new RunAbortedError();
     rpc.start();
+    if (hooks.signal?.aborted) {
+      await rpc.dispose();
+      throw new RunAbortedError();
+    }
     hooks.onStatus?.(`pi pid=${(rpc as any).child?.pid ?? "?"} attempt=${attempt}`);
 
     const modelSpan = store.startSpan(task.id, "model", String(cfg.model ?? "default"), rootSpan, { chars: finalPrompt.length });
-    await rpc.prompt(finalPrompt, cfg.maxMinutes * 60_000 + 5_000);
+    await rpc.prompt(finalPrompt, cfg.maxMinutes * 60_000 + 5_000, hooks.signal);
     store.endSpan(modelSpan, "ok", { chars: promptChars, tokens: usage?.total ?? 0 });
 
     if (hooks.signal?.aborted) {
