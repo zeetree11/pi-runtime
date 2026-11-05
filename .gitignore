@@ -1,4 +1,6 @@
 node_modules/
+web/node_modules/
+web/dist/
 .npm-cache/
 data/
 config.json

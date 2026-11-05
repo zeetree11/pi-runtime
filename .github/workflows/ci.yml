@@ -31,3 +31,20 @@ jobs:
         run: |
           bash -n deploy/bootstrap.sh
           bash -n deploy/pi-rt.service 2>/dev/null || true
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install and build the web UI
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
