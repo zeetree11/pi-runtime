@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tree-Agent — 记得住的个人 Agent 运行时</title>
+  <meta name="description" content="Tree-Agent 把 pi 编码代理包成个人运行时：SQLite 队列、证据记忆、飞书、QQ、Web 和命令行。数据留在你的机器上。">
+  <link rel="canonical" href="https://zeetree11.github.io/Tree-Agent/">
+  <meta property="og:title" content="Tree-Agent">
+  <meta property="og:description" content="记得住，也守得住。个人 Agent 运行时。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://zeetree11.github.io/Tree-Agent/">
+  <meta name="theme-color" content="#f3eee6">
+  <link rel="icon" href="./mascot.svg" type="image/svg+xml">
+  <link rel="preload" href="./fonts/noto-serif-sc.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="./styles.css">
+  <script>
+    try {
+      var lang = localStorage.getItem("tree-agent-lang");
+      var theme = localStorage.getItem("tree-agent-theme");
+      if (lang === "en") document.documentElement.lang = "en";
+      if (theme === "dark") document.documentElement.dataset.theme = "dark";
+    } catch (e) {}
+    document.documentElement.classList.add("js");
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">
+    <span class="zh">跳到正文</span><span class="en">Skip to content</span>
+  </a>
+  <div class="progress" aria-hidden="true"></div>
+
+  <header class="nav" id="top">
+    <div class="nav-inner">
+      <a class="brand" href="#top">
+        <img src="./mascot.svg" width="36" height="36" alt="Tree-Agent">
+        <span class="word" aria-hidden="true">Tree-Agent</span>
+      </a>
+      <nav aria-label="primary">
+        <button class="menu-btn" type="button" aria-expanded="false" aria-controls="nav-links">
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 9h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span class="sr-only zh">菜单</span><span class="sr-only en">Menu</span>
+        </button>
+        <ul class="nav-links" id="nav-links">
+          <li><a href="#capabilities"><span class="zh">能力</span><span class="en">What it does</span></a></li>
+          <li><a href="#flow"><span class="zh">路径</span><span class="en">Path</span></a></li>
+          <li><a href="#channels"><span class="zh">通道</span><span class="en">Channels</span></a></li>
+          <li><a href="#memory"><span class="zh">记忆</span><span class="en">Memory</span></a></li>
+          <li><a href="#start"><span class="zh">开始</span><span class="en">Start</span></a></li>
+        </ul>
+      </nav>
+      <div class="nav-actions">
+        <div class="seg" role="group" aria-label="language">
+          <button type="button" id="lang-zh" aria-pressed="true">中文</button>
+          <button type="button" id="lang-en" aria-pressed="false">EN</button>
+        </div>
+        <button class="icon-btn" id="theme" type="button" aria-label="切换深色">
+          <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M14.5 2.5a8.5 8.5 0 1 0 7 12.2A7 7 0 0 1 14.5 2.5z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><path stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/></svg>
+        </button>
+        <a class="btn btn-primary" href="https://github.com/zeetree11/Tree-Agent">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <p class="kicker enter d1"><span class="zh">个人 Agent 运行时</span><span class="en">A personal agent runtime</span></p>
+          <h1 class="enter d2">
+            <span class="zh">记得住，<br><em>也守得住。</em></span>
+            <span class="en">It remembers.<br><em>The line holds.</em></span>
+          </h1>
+          <p class="lead enter d3">
+            <span class="zh">Tree-Agent 把 pi 编码代理包在属于你的一层里。消息先写成编号事件，任务进入 SQLite 队列，再交给一次性的 pi 子进程。命令行、Web、飞书和 QQ 共用这一份记忆。</span>
+            <span class="en">Tree-Agent is the layer around the pi coding agent that belongs to you. A message becomes a numbered event, a task enters a SQLite queue, and a one-shot pi child process does the work. The CLI, web, Feishu, and QQ share that memory.</span>
+          </p>
+          <div class="actions enter d4">
+            <a class="btn btn-primary" href="https://github.com/zeetree11/Tree-Agent">
+              <span class="zh">在 GitHub 上查看</span><span class="en">View on GitHub</span>
+            </a>
+            <a class="btn btn-ghost" href="#start">
+              <span class="zh">快速开始</span><span class="en">Quick start</span>
+              <span class="arrow" aria-hidden="true">→</span>
+            </a>
+          </div>
+          <p class="meta-line enter d4">
+            <span class="zh">MIT · Node ≥ 22.19 · 数据留在这台机器上</span>
+            <span class="en">MIT · Node ≥ 22.19 · The data stays on this machine</span>
+          </p>
+        </div>
+
+        <div class="stage">
+          <img class="stage-mascot" src="./mascot.svg" width="84" height="84" alt="">
+          <div class="window">
+            <div class="win-bar">
+              <span class="win-dot" aria-hidden="true"></span>
+              <span class="win-title"><span class="zh">主会话</span><span class="en">main thread</span></span>
+              <div class="chip" id="chip">
+                <span class="pulse" aria-hidden="true"></span>
+                <span id="chip-label">
+                  <span class="zh">等待一句</span><span class="en">waiting</span>
+                </span>
+              </div>
+            </div>
+            <div class="thread" id="thread">
+              <p class="msg user" data-step="1">
+                <span class="zh">下午三点后我不喝咖啡。先记成短期状态，七天就行。还有没有待触发的提醒？</span>
+                <span class="en">No coffee after 3pm. Keep that as short-lived state for seven days. Anything waiting to remind me?</span>
+              </p>
+              <p class="status" data-step="2"><i aria-hidden="true"></i><span class="zh">事件 #1842 · 已写入</span><span class="en">event #1842 · stored</span></p>
+              <p class="status" data-step="3"><i aria-hidden="true"></i>memory_search · preference</p>
+              <p class="status" data-step="4"><i aria-hidden="true"></i><span class="zh">组装上下文 · 6 段</span><span class="en">compose · 6 segments</span></p>
+              <p class="msg assistant" data-step="5" id="reply" data-zh="已记下短期状态：下午三点后不喝咖啡，大约还能保持 7 天。没有待触发的提醒。" data-en="Saved a short-lived state: no coffee after 3pm, for about seven days. Nothing is waiting to be pushed.">
+                <span class="zh">已记下短期状态：下午三点后不喝咖啡，大约还能保持 7 天。没有待触发的提醒。</span>
+                <span class="en">Saved a short-lived state: no coffee after 3pm, for about seven days. Nothing is waiting to be pushed.</span>
+              </p>
+            </div>
+          </div>
+          <button class="replay" id="replay" type="button">
+            <span class="zh">再看一遍这一轮</span><span class="en">Replay this turn</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <p class="statement reveal">
+      <span class="zh">进程可以死。<br>队列的位置不会丢。</span>
+      <span class="en">The process can die.<br>The place in the queue does not.</span>
+    </p>
+
+    <section class="section" id="capabilities">
+      <div class="wrap split">
+        <div class="sticky-col">
+          <p class="kicker"><span class="zh">能力</span><span class="en">What it does</span></p>
+          <h2><span class="zh">聊天壳子没有的三样东西。</span><span class="en">Three things a chat window does not have.</span></h2>
+          <p class="lede">
+            <span class="zh">状态留在编排层。边界留在子进程。内核可以换，平台逻辑是你的。</span>
+            <span class="en">State stays in the orchestrator. The boundary stays on the child process. The kernel can be swapped. The platform logic is yours.</span>
+          </p>
+        </div>
+        <ol class="features">
+          <li class="reveal">
+            <span class="num">01</span>
+            <div>
+              <h3><span class="zh">队列扛得住崩溃</span><span class="en">The queue survives a crash</span></h3>
+              <p><span class="zh">任务、事件、结果写在 SQLite 里，使用 WAL。执行器被杀掉或重启，领取的位置还在。</span><span class="en">Tasks, events, and results live in SQLite with WAL. Kill or restart the executor and the place it left off is still there.</span></p>
+            </div>
+          </li>
+          <li class="reveal">
+            <span class="num">02</span>
+            <div>
+              <h3><span class="zh">一次性的 pi 子进程</span><span class="en">A one-shot pi child</span></h3>
+              <p><span class="zh">执行器不连数据库，不占服务端口。两边用 JSONL 说话：stdin 进去，stdout 出来。等的是 agent_settled，不是单独的一次 agent_end。</span><span class="en">The executor has no database and opens no service port. It speaks JSONL: stdin in, stdout out. The runtime waits for agent_settled, not a single agent_end.</span></p>
+            </div>
+          </li>
+          <li class="reveal">
+            <span class="num">03</span>
+            <div>
+              <h3><span class="zh">证据才算记忆</span><span class="en">Memory needs evidence</span></h3>
+              <p><span class="zh">每条记忆绑到一条编号事件和逐字引文，而且引文必须来自用户消息。置信度不够只存 tentative，不注入。凭据形状的内容在写入边界被拒绝。</span><span class="en">Each memory is tied to one numbered event and a verbatim quote, and the quote has to come from a user message. Low confidence stays tentative and is never injected. Credential-shaped writes are refused at the boundary.</span></p>
+            </div>
+          </li>
+          <li class="reveal">
+            <span class="num">04</span>
+            <div>
+              <h3><span class="zh">通道只是运输</span><span class="en">Channels are transport</span></h3>
+              <p><span class="zh">命令行、Web、飞书长连接、QQ 的 OneBot v11，以及 Telegram，走同一条 ingest。重投的消息用 claimMessage 丢掉，不会变成第二条记忆。</span><span class="en">The CLI, web, Feishu long connection, QQ over OneBot v11, and Telegram all call ingest. A redelivered message is dropped by claimMessage instead of becoming a second memory.</span></p>
+            </div>
+          </li>
+          <li class="reveal">
+            <span class="num">05</span>
+            <div>
+              <h3><span class="zh">技能与 MCP</span><span class="en">Skills and MCP</span></h3>
+              <p><span class="zh">技能是磁盘上的 SKILL.md，运行时只读 frontmatter，不执行它。MCP 用 pi 自己的客户端。只读沙箱会关掉全部 mcp__* 工具。</span><span class="en">A skill is a SKILL.md on disk. The runtime reads its frontmatter and does not execute it. MCP uses pi’s own client. Readonly mode turns every mcp__* tool off.</span></p>
+            </div>
+          </li>
+          <li class="reveal">
+            <span class="num">06</span>
+            <div>
+              <h3><span class="zh">人格、提醒、短状态</span><span class="en">Persona, reminders, short state</span></h3>
+              <p><span class="zh">SOUL.md 管怎么说，CONTRACTS.md 管怎么干，两份预算分开。提醒写在回复里的控制指令上，到点由运行时推送。端口、分支这种只活几天的事，用带 TTL 的短期状态，同步落库。</span><span class="en">SOUL.md is how it speaks. CONTRACTS.md is how it works. They have separate budgets. A reminder is a control line in the reply, and the runtime pushes it when it is due. Ports and branches live as short state with a TTL, written synchronously.</span></p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" id="flow">
+      <div class="wrap">
+        <p class="kicker"><span class="zh">路径</span><span class="en">How a turn runs</span></p>
+        <h2><span class="zh">从一句话到一次回复。</span><span class="en">From one sentence to one reply.</span></h2>
+        <div class="flow">
+          <div class="flow-line" aria-hidden="true"><span class="bead"></span></div>
+          <ol>
+            <li class="reveal">
+              <span class="dot">1</span>
+              <h3><span class="zh">接入</span><span class="en">Ingest</span></h3>
+              <p><span class="zh">任何通道先把消息交给 ingest。模型还没被叫到，证据已经在 conversation_events 里，带编号。</span><span class="en">Every channel hands the message to ingest. Before the model is called, the evidence is already a numbered row in conversation_events.</span></p>
+            </li>
+            <li class="reveal">
+              <span class="dot">2</span>
+              <h3><span class="zh">队列</span><span class="en">Queue</span></h3>
+              <p><span class="zh">任务写进 SQLite。worker 逐个领取。崩溃之后可以再领，不会因为进程没了就丢掉位置。</span><span class="en">The task is written to SQLite. A worker claims one at a time. After a crash it can claim again. The place is not lost with the process.</span></p>
+            </li>
+            <li class="reveal">
+              <span class="dot">3</span>
+              <h3><span class="zh">执行</span><span class="en">Run</span></h3>
+              <p><span class="zh">runTask 拉起 pi --mode rpc。上下文在这一刻组装：记忆、短状态、摘要、窗口。子进程不碰数据库。</span><span class="en">runTask starts pi --mode rpc. Context is composed at that moment: memory, short state, summary, window. The child never touches the database.</span></p>
+            </li>
+            <li class="reveal">
+              <span class="dot">4</span>
+              <h3><span class="zh">回复</span><span class="en">Reply</span></h3>
+              <p><span class="zh">文字写回原来的通道，并再记一条事件。Web 用 SSE 把状态、工具和文本增量推给浏览器。</span><span class="en">The text goes back on the same channel, and another event is stored. The web channel pushes status, tools, and text deltas over SSE.</span></p>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="channels">
+      <div class="wrap">
+        <p class="kicker"><span class="zh">通道</span><span class="en">Where it lives</span></p>
+        <h2><span class="zh">同一个人，同一份记忆。</span><span class="en">One person. One memory.</span></h2>
+        <ul class="channels">
+          <li class="reveal">
+            <div>
+              <span class="ch-k">01</span>
+              <h3>CLI</h3>
+            </div>
+            <p><span class="zh">ask 入队并立刻跑。worker 是守护进程，逐个领任务。doctor 跟 pi 握手，看模型有没有绑上。</span><span class="en">ask enqueues a task and runs it. worker is the daemon that drains the queue. doctor handshakes with pi and shows whether a model is bound.</span></p>
+            <code>node src/cli.ts ask "…" --cwd .</code>
+          </li>
+          <li class="reveal">
+            <div>
+              <span class="ch-k">02</span>
+              <h3>Web</h3>
+            </div>
+            <p><span class="zh">本机 HTTP 加 SSE，不是第二套运行时。默认只听 127.0.0.1:8788。离开 loopback 必须自己设置 PI_RT_WEB_TOKEN。界面在 web/。</span><span class="en">Local HTTP plus SSE, not a second runtime. It listens on 127.0.0.1:8788 unless you move it. Leaving loopback requires PI_RT_WEB_TOKEN. The UI lives in web/.</span></p>
+            <code>node src/cli.ts serve --channel web</code>
+          </li>
+          <li class="reveal">
+            <div>
+              <span class="ch-k">03</span>
+              <h3><span class="zh">飞书</span><span class="en">Feishu</span></h3>
+            </div>
+            <p><span class="zh">长连接，只需要出站 TLS，不要公网 IP、域名或证书。也保留了可本地演练的 webhook 模式。目前只接文本消息。</span><span class="en">A long connection that only needs outbound TLS. No public IP, domain, or certificate. A webhook mode remains for local drills. Text messages only, for now.</span></p>
+            <code>node src/cli.ts serve --channel feishu</code>
+          </li>
+          <li class="reveal">
+            <div>
+              <span class="ch-k">04</span>
+              <h3>OneBot</h3>
+            </div>
+            <p><span class="zh">QQ 走 OneBot v11：WebSocket 收，HTTP 发。群里默认只有真正 @ 到它才回复。NapCat 或 Lagrange 都可以。</span><span class="en">QQ speaks OneBot v11: WebSocket in, HTTP out. In a group it answers a real @ by default. NapCat or Lagrange both work.</span></p>
+            <code>node src/cli.ts serve --channel qq</code>
+          </li>
+        </ul>
+        <p class="note">
+          <span class="zh">Telegram 也是一条长轮询通道，需要 TELEGRAM_BOT_TOKEN。本地可以用 feed 模拟某个说话人。</span>
+          <span class="en">Telegram is there too, as long polling with TELEGRAM_BOT_TOKEN. feed can simulate a speaker locally.</span>
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="memory">
+      <div class="wrap">
+        <p class="kicker"><span class="zh">记忆 · 技能 · MCP</span><span class="en">Memory, skills, MCP</span></p>
+        <h2><span class="zh">记什么，和能调用什么，是两回事。</span><span class="en">What it remembers is not what it can call.</span></h2>
+        <div class="mem-grid">
+          <article class="reveal">
+            <h3><span class="zh">记忆</span><span class="en">Memory</span></h3>
+            <p><span class="zh">三层：证据、主体、裁决。动作是 create、correct、invalidate、contest。有争议的行不注入。偏好槽位让新的说法盖过旧的；跨槽位用可信度乘时效，打平就标 contested。默认检索是离线的 hash embedding，只抓字面相似。把 EMBEDDING_BASE_URL 指到兼容接口之后，才走那套向量。知识库和记忆分开，文档不能伪装成你说过的话。</span><span class="en">Three layers: evidence, subject, verdict. The actions are create, correct, invalidate, and contest. Contested rows are not injected. Preference slots let the newer statement win. Across slots, credibility times recency, and a near-tie is contested. Search defaults to an offline hash embedding, which only catches surface similarity. Point EMBEDDING_BASE_URL at a compatible endpoint when you want real vectors. The knowledge base stays separate, so a document cannot pretend to be something you said.</span></p>
+          </article>
+          <article class="reveal">
+            <h3><span class="zh">技能</span><span class="en">Skills</span></h3>
+            <p><span class="zh">按 Agent Skills 的路径找 SKILL.md：用户目录，以及从仓库根到当前工作区的项目目录。同名时近处的项目技能盖过用户技能。扫描器只读 frontmatter。pi-rt skills 用来核对这台机器上实际有哪些，避免一个写错的目录看起来像模型自己不用。</span><span class="en">SKILL.md files are discovered the Agent Skills way: the user directory, then project directories from the repo root down to the working directory. The nearer project skill wins a name clash. The scanner only reads frontmatter. pi-rt skills lists what this machine actually has, so a mistyped folder does not look like a skill the model ignored.</span></p>
+          </article>
+          <article class="reveal">
+            <h3>MCP</h3>
+            <p><span class="zh">协议不用重写，pi 已经是客户端。仓库里有手写的 server：fetch 与 search、memory_search、知识库，以及 fanout、orchestrate、便签、文件锁、send、propose_self_edit。调度只在运行时一处，server 是薄客户端。只读模式排除 mcp__*，因为别人声明的工具我们查不了它会不会写。</span><span class="en">The protocol is not reimplemented. pi is already the client. This repo ships hand-written servers: fetch and search, memory_search, knowledge, plus fanout, orchestrate, notes, file locks, send, and propose_self_edit. One runtime owns scheduling. Servers are thin clients. Readonly mode excludes mcp__*, because a server declares its own powers and we cannot see whether it writes.</span></p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="privacy">
+      <div class="band-wrap">
+        <div class="band">
+          <p class="kicker"><span class="zh">自托管</span><span class="en">On your machine</span></p>
+          <h2><span class="zh">没有账号系统。坐在这台机器前的人就是主人。</span><span class="en">No accounts. The person at this machine is the owner.</span></h2>
+          <div class="band-grid">
+            <article>
+              <h3><span class="zh">磁盘</span><span class="en">Disk</span></h3>
+              <p><span class="zh">数据库是 data/runtime.db。模型凭证在 data/pi，和 ~/.pi 分开。子进程只拿一份收窄过的环境变量，shell 里 echo 不到飞书密钥。</span><span class="en">The database is data/runtime.db. Model credentials live in data/pi, apart from ~/.pi. The child gets a narrowed environment, so a shell cannot echo a Feishu secret.</span></p>
+            </article>
+            <article>
+              <h3><span class="zh">网络</span><span class="en">Network</span></h3>
+              <p><span class="zh">飞书用出站长连接。Web 默认绑在 loopback；要绑到别处，必须自己设置令牌。本地控制 API 在 127.0.0.1:8899，没有鉴权，也不该被暴露出去。</span><span class="en">Feishu uses an outbound long connection. Web binds to loopback unless you set a token yourself. The local control API is 127.0.0.1:8899, with no auth, and it should not be exposed.</span></p>
+            </article>
+            <article>
+              <h3><span class="zh">边界</span><span class="en">Boundary</span></h3>
+              <p><span class="zh">readonly、safe、full 是工具裁剪，不是容器。safe 没有 bash。readonly 连 MCP 一起关。read 仍能读你能读的文件。真正的隔离需要容器或虚拟机。</span><span class="en">readonly, safe, and full trim tools. They are not a container. safe has no bash. readonly also turns MCP off. read can still open any file you can open. Real isolation needs a container or a VM.</span></p>
+            </article>
+          </div>
+          <p class="band-note">
+            <span class="zh">单实例。SQLite 加一条长连接，不能水平扩容。图片、文件和语音目前会跳过，而不是假装解析了。</span>
+            <span class="en">One instance. SQLite plus one long connection does not scale out. Images, files, and audio are skipped today, rather than parsed badly.</span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="start">
+      <div class="wrap">
+        <p class="kicker"><span class="zh">快速开始</span><span class="en">Quick start</span></p>
+        <h2><span class="zh">三步，确认管道是通的。</span><span class="en">Three commands, to see the pipe is open.</span></h2>
+        <p class="lede">
+          <span class="zh">在仓库根目录。doctor 不需要已经登录：没绑模型时它仍会握手，并告诉你下一步是 login。</span>
+          <span class="en">From the repo root. doctor does not need a login. With no model bound it still handshakes, then tells you to login.</span>
+        </p>
+        <div class="code-panel">
+          <div class="code-bar">
+            <div class="tabs" role="tablist" aria-label="quick start">
+              <button type="button" role="tab" id="tab-cli" aria-selected="true" aria-controls="panel-cli">CLI</button>
+              <button type="button" role="tab" id="tab-web" aria-selected="false" aria-controls="panel-web" tabindex="-1">Web</button>
+            </div>
+            <button class="copy" id="copy" type="button">
+              <span class="zh">复制</span><span class="en">Copy</span>
+            </button>
+          </div>
+          <pre id="panel-cli" role="tabpanel" aria-labelledby="tab-cli"><code><span class="prompt">$</span> npm install --ignore-scripts
+<span class="prompt">$</span> node src/cli.ts doctor
+<span class="prompt">$</span> node src/cli.ts list</code></pre>
+          <pre id="panel-web" role="tabpanel" aria-labelledby="tab-web" hidden><code><span class="prompt">$</span> node src/cli.ts serve --channel web
+<span class="prompt">$</span> cd web &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
+        </div>
+        <p class="note">
+          <span class="zh">要真的跑一轮：node src/cli.ts login，然后 node src/cli.ts ask "用一句话说明这个仓库" --cwd . 。没有 provider 密钥时，ask 会失败并留下这条任务的失败记录。Web 开发界面在 http://127.0.0.1:5173 ，把 /api 代理到 8788。</span>
+          <span class="en">To run a real turn: node src/cli.ts login, then node src/cli.ts ask "用一句话说明这个仓库" --cwd . . Without a provider key, ask fails and the task stays on record as failed. The web dev UI is http://127.0.0.1:5173 and proxies /api to 8788.</span>
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="wrap">
+        <p class="kicker">FAQ</p>
+        <h2><span class="zh">问得具体一点。</span><span class="en">The specific questions.</span></h2>
+        <div class="faq">
+          <details>
+            <summary><span class="zh">它是 pi 的另一个发行版吗？</span><span class="en">Is this a fork of pi?</span></summary>
+            <p><span class="zh">不是。产品名是 Tree-Agent，内核是 @earendil-works/pi-coding-agent，用 RPC 子进程调用。外面这一层加上队列、记忆、通道和工具治理。npm 包名是 tree-agent。路径和容器名里的 pi-runtime / pi-rt 留着，是为了不打断已经在跑的部署。命令行入口仍是 node src/cli.ts。</span><span class="en">No. The product is Tree-Agent. The kernel is @earendil-works/pi-coding-agent, called as an RPC child process. This layer adds the queue, memory, channels, and tool governance. The npm package name is tree-agent. Paths and container names still say pi-runtime / pi-rt so existing deployments keep running. The command is still node src/cli.ts.</span></p>
+          </details>
+          <details>
+            <summary><span class="zh">模型和数据各在哪？</span><span class="en">Where do the model and the data live?</span></summary>
+            <p><span class="zh">编排在你的机器上。数据库是 data/runtime.db。模型走你自己登录的 provider，凭证放在 data/pi，不写进 ~/.pi。运行时不提供一个托管账号。</span><span class="en">Orchestration is on your machine. The database is data/runtime.db. The model is whichever provider you log in to. Credentials stay in data/pi, not ~/.pi. There is no hosted account.</span></p>
+          </details>
+          <details>
+            <summary><span class="zh">几个通道会不会记成好几个人？</span><span class="en">Do the channels become several people?</span></summary>
+            <p><span class="zh">主人由配置决定，ownerName 或 PI_RT_OWNER，不是谁先说话谁就是主人。PI_RT_OWNER_IDS 可以把飞书、Telegram 上的另一个 id 也算成同一个人。手写记忆全局可见，从某个会话提炼的记忆留在那个线程。</span><span class="en">The owner is configured, ownerName or PI_RT_OWNER, not whoever speaks first. PI_RT_OWNER_IDS can mark another Feishu or Telegram id as the same person. Hand-written memories are global. Memories distilled from a thread stay on that thread.</span></p>
+          </details>
+          <details>
+            <summary><span class="zh">每句话都会变成事实吗？</span><span class="en">Does every sentence become a fact?</span></summary>
+            <p><span class="zh">不会。默认攒够一批，或线程闲置一段时间，才提炼。引文必须是那一条用户消息的子串。助手的复述不算证据。争议中的行不会被塞进提示词。</span><span class="en">No. Distillation waits for a batch, or for a thread to sit idle. The quote must be a substring of that one user message. The assistant restating something is not evidence. Contested rows are not put into the prompt.</span></p>
+          </details>
+          <details>
+            <summary><span class="zh">沙箱能挡住什么？</span><span class="en">What does the sandbox actually stop?</span></summary>
+            <p><span class="zh">它去掉工具，而不是把进程关进容器。safe 是默认，没有 bash。readonly 不能写，并且关掉 MCP。full 才有 shell，同时环境变量是收窄的。处理不可信任务时，只有 readonly 勉强算安全。</span><span class="en">It removes tools. It does not jail the process in a container. safe is the default, and it has no bash. readonly cannot write, and MCP is off. full is the mode with a shell, and the environment is still narrowed. For untrusted work, only readonly is even close to safe.</span></p>
+          </details>
+          <details>
+            <summary><span class="zh">能多机扩容吗？</span><span class="en">Can it scale out?</span></summary>
+            <p><span class="zh">不能。一台机器，一个 SQLite，一条长连接。这是个人运行时的形状，不是集群。</span><span class="en">No. One machine, one SQLite file, one long connection. That is the shape of a personal runtime, not a cluster.</span></p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div>
+        <strong>Tree-Agent</strong>
+        <span class="zh"> · MIT · 包在 </span><span class="en"> · MIT · wrapped around </span>
+        <a href="https://github.com/earendil-works/pi">pi</a>
+        <span class="zh"> 外面</span>
+      </div>
+      <nav aria-label="footer">
+        <a href="https://github.com/zeetree11/Tree-Agent">GitHub</a>
+        <a href="#start"><span class="zh">快速开始</span><span class="en">Quick start</span></a>
+        <a href="#faq">FAQ</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="./main.js"></script>
+</body>
+</html>

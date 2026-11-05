@@ -1,4 +1,5 @@
 node_modules/
+site/dist/
 .npm-cache/
 data/
 config.json

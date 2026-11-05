@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Tree-Agent">
+  <title>Tree-Agent</title>
+  <defs>
+    <radialGradient id="m-body" cx="36%" cy="30%" r="72%">
+      <stop offset="0%" stop-color="#F8DCCE"/>
+      <stop offset="46%" stop-color="#E7A88C"/>
+      <stop offset="100%" stop-color="#C86A49"/>
+    </radialGradient>
+    <radialGradient id="m-cheek" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#9C341F" stop-opacity="0.45"/>
+      <stop offset="70%" stop-color="#9C341F" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="100" cy="178" rx="46" ry="7" fill="#1A1613" opacity="0.13">
+    <animate attributeName="rx" values="46;42;46" dur="4.8s" repeatCount="indefinite"/>
+  </ellipse>
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" dur="4.8s" repeatCount="indefinite"/>
+    <path fill="url(#m-body)" d="M104 30c38-2 62 22 66 54 4 30-4 52-22 68-16 14-34 22-56 20-28-2-50-22-54-52-4-32 8-62 36-78 10-6 20-12 30-12z"/>
+    <ellipse cx="138" cy="118" rx="16" ry="10" fill="url(#m-cheek)"/>
+    <ellipse cx="72" cy="78" rx="22" ry="14" fill="#fff" opacity="0.28"/>
+    <g fill="#1A1613">
+      <ellipse cx="84" cy="98" rx="8.5" ry="10">
+        <animate attributeName="ry" values="10;10;1.1;10;10" keyTimes="0;0.46;0.5;0.54;1" dur="5.6s" repeatCount="indefinite"/>
+      </ellipse>
+      <ellipse cx="122" cy="94" rx="7.2" ry="8.6">
+        <animate attributeName="ry" values="8.6;8.6;1;8.6;8.6" keyTimes="0;0.48;0.52;0.56;1" dur="5.6s" begin="0.08s" repeatCount="indefinite"/>
+      </ellipse>
+    </g>
+    <g fill="#fff">
+      <ellipse cx="80.5" cy="94" rx="2.2" ry="2.6"/>
+      <ellipse cx="119" cy="90.5" rx="1.8" ry="2.1"/>
+    </g>
+  </g>
+</svg>

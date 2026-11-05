@@ -1,0 +1,10 @@
+{
+  "name": "tree-agent-site",
+  "private": true,
+  "description": "Static landing page for Tree-Agent. Relative asset URLs, so GitHub Pages can serve it at /Tree-Agent/.",
+  "scripts": {
+    "dev": "python3 -m http.server 4173",
+    "build": "node build.mjs",
+    "preview": "python3 -m http.server 4173 --directory dist"
+  }
+}
